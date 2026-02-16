@@ -1,0 +1,14 @@
+[Unit]
+Description=Puter AI Proxy Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/mulky/puter-proxy
+ExecStart=/home/mulky/.nvm/versions/node/v22.17.0/bin/node index.js
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+{
+  "model": "x-ai/grok-4-1-fast",
+  "messages": [{"role": "user", "content": "Hello! What is one unique improvement in Grok 4.1 Fast compared to previous versions?"}],
+  "stream": false
+}

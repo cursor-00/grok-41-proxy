@@ -1,0 +1,20 @@
+{
+  "name": "puter-proxy",
+  "version": "1.0.0",
+  "description": "Puter AI proxy with auto-routing",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
+    "@heyputer/puter.js": "^2.2.10",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1"
+  }
+}
