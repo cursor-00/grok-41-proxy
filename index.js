@@ -22,7 +22,14 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // ────────────────────────────────────────────────
-// HEALTH CHECK (for Cursor, Continue, Antigravity, etc.)
+// OPTIONS preflight (Extra safety for Accomplish & other clients)
+// ────────────────────────────────────────────────
+app.options("*", (req, res) => {
+  res.status(200).end();
+});
+
+// ────────────────────────────────────────────────
+// HEALTH CHECK
 // ────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({
@@ -33,6 +40,7 @@ app.get("/", (req, res) => {
     endpoints: [
       "GET  /                          → Health check",
       "GET  /v1/models                 → Model list (required for Connect)",
+      "GET  /models                    → Alias for clients without /v1 (Accomplish)",
       "POST /v1/chat/completions       → OpenAI Chat",
       "POST /v1/messages               → Anthropic",
       "POST /v1/responses              → OpenAI Responses API"
@@ -71,6 +79,19 @@ app.get("/v1/models", (req, res) => {
         created: 1735000000,
         owned_by: "anthropic"
       }
+    ]
+  });
+});
+
+// ────────────────────────────────────────────────
+// /models alias (for clients that call /models without /v1)
+// ────────────────────────────────────────────────
+app.get("/models", (req, res) => {
+  res.json({
+    object: "list",
+    data: [
+      { id: "x-ai/grok-4-1-fast", object: "model" },
+      { id: "anthropic/claude-opus-4-6", object: "model" }
     ]
   });
 });
@@ -231,4 +252,5 @@ app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
   console.log(`✅ Health check: http://localhost:${PORT}/`);
   console.log(`✅ Models list:  http://localhost:${PORT}/v1/models`);
+  console.log(`✅ Alias:        http://localhost:${PORT}/models`);
 });
