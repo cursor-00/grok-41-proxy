@@ -17,9 +17,7 @@ console.log("Puter initialized, auth token present:", !!process.env.PUTER_AUTH_T
 
 const app = express();
 
-// ────────────────────────────────────────────────
-// CORS Middleware (replaces the old OPTIONS block)
-// ────────────────────────────────────────────────
+// CORS Middleware
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -36,64 +34,30 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// ────────────────────────────────────────────────
 // HEALTH CHECK
-// ────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({
     status: "OK",
     service: "Puter Proxy",
-    version: "1.2",
-    message: "Ready for Cursor / Continue / Antigravity / any OpenAI-compatible client",
-    endpoints: [
-      "GET  /                          → Health check",
-      "GET  /v1/models                 → Model list (required for Connect)",
-      "GET  /models                    → Alias for clients without /v1 (Accomplish)",
-      "POST /v1/chat/completions       → OpenAI Chat",
-      "POST /v1/messages               → Anthropic",
-      "POST /v1/responses              → OpenAI Responses API"
-    ]
+    version: "1.4-accomplish-fixed",
+    message: "Ready for Accomplish with correct GPT alias routing"
   });
 });
 
-// ────────────────────────────────────────────────
-// OpenAI /v1/models (CRITICAL for "Connect" button)
-// ────────────────────────────────────────────────
+// MODELS LIST
 app.get("/v1/models", (req, res) => {
   res.json({
     object: "list",
     data: [
-      {
-        id: "x-ai/grok-4-1-fast",
-        object: "model",
-        created: 1735689600,
-        owned_by: "x-ai"
-      },
-      {
-        id: "anthropic/claude-opus-4-6",
-        object: "model",
-        created: 1735689600,
-        owned_by: "anthropic"
-      },
-      {
-        id: "anthropic/claude-sonnet-4-6",
-        object: "model",
-        created: 1735689600,
-        owned_by: "anthropic"
-      },
-      {
-        id: "anthropic/claude-opus-4-5-latest",
-        object: "model",
-        created: 1735000000,
-        owned_by: "anthropic"
-      }
+      { id: "x-ai/grok-4-1-fast", object: "model", owned_by: "x-ai" },
+      { id: "anthropic/claude-opus-4-6", object: "model", owned_by: "anthropic" },
+      { id: "anthropic/claude-sonnet-4-6", object: "model", owned_by: "anthropic" },
+      { id: "anthropic/claude-opus-4-5-latest", object: "model", owned_by: "anthropic" }
     ]
   });
 });
 
-// ────────────────────────────────────────────────
-// /models alias (for Accomplish and other clients that skip /v1)
-// ────────────────────────────────────────────────
+// /models alias
 app.get("/models", (req, res) => {
   res.json({
     object: "list",
@@ -104,7 +68,7 @@ app.get("/models", (req, res) => {
   });
 });
 
-// Helper to extract text content
+// Helper
 function extractContent(content) {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) return content.map((c) => c.text || c).join("");
@@ -112,11 +76,23 @@ function extractContent(content) {
 }
 
 // ────────────────────────────────────────────────
-// OpenAI Chat Completions
+// OpenAI Chat Completions + FIXED Accomplish routing
 // ────────────────────────────────────────────────
 app.post("/v1/chat/completions", async (req, res) => {
   try {
     let { messages, model } = req.body;
+
+    // 🎯 FIXED Accomplish routing (gpt-5.2 now untouched)
+    const m = model?.toLowerCase() || "";
+
+    if (m.includes("5.1") && m.includes("codex") && m.includes("max")) {
+      console.log(`[Accomplish] Routing ${model} → Claude Opus 4.6`);
+      model = "anthropic/claude-opus-4-6";
+    }
+    else if (m.includes("5.1") && m.includes("codex") && m.includes("mini")) {
+      console.log(`[Accomplish] Routing ${model} → Grok 4.1 Fast`);
+      model = "x-ai/grok-4-1-fast";
+    }
 
     if (!model || model === "auto" || model === "Auto") {
       model = pickModel(messages);
@@ -141,6 +117,64 @@ app.post("/v1/chat/completions", async (req, res) => {
   } catch (error) {
     console.error("Error in /v1/chat/completions:", error.message);
     res.status(500).json({ error: error.message, type: "internal_error" });
+  }
+});
+
+// ────────────────────────────────────────────────
+// OpenAI Responses API + FIXED Accomplish routing
+// ────────────────────────────────────────────────
+app.post("/v1/responses", async (req, res) => {
+  try {
+    let { model, input, previous_response_id, temperature, max_output_tokens } = req.body;
+
+    // 🎯 FIXED Accomplish routing (gpt-5.2 now untouched)
+    const m = model?.toLowerCase() || "";
+
+    if (m.includes("5.1") && m.includes("codex") && m.includes("max")) {
+      console.log(`[Accomplish] Routing ${model} → Claude Opus 4.6`);
+      model = "anthropic/claude-opus-4-6";
+    }
+    else if (m.includes("5.1") && m.includes("codex") && m.includes("mini")) {
+      console.log(`[Accomplish] Routing ${model} → Grok 4.1 Fast`);
+      model = "x-ai/grok-4-1-fast";
+    }
+
+    let messages = [];
+    if (Array.isArray(input)) messages = input;
+    else if (typeof input === "string") messages = [{ role: "user", content: input }];
+    else messages = [{ role: "user", content: "" }];
+
+    if (!model || model === "auto" || model === "Auto") {
+      model = pickModel(messages);
+    }
+
+    const puterResponse = await puter.ai.chat(messages, {
+      model,
+      stream: false,
+      ...(temperature !== undefined && { temperature }),
+      ...(max_output_tokens !== undefined && { max_tokens: max_output_tokens }),
+    });
+
+    const contentText = extractContent(puterResponse.message?.content || puterResponse);
+
+    res.json({
+      id: `resp_${Date.now().toString(36)}`,
+      object: "response",
+      created: Math.floor(Date.now() / 1000),
+      model,
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: contentText }],
+        },
+      ],
+      usage: puterResponse.usage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      ...(previous_response_id && { previous_response_id }),
+    });
+  } catch (err) {
+    console.error("Error in /v1/responses:", err.message);
+    res.status(500).json({ error: { message: err.message, type: "internal_error" } });
   }
 });
 
@@ -186,52 +220,6 @@ app.post("/v1/messages", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────
-// OpenAI Responses API
-// ────────────────────────────────────────────────
-app.post("/v1/responses", async (req, res) => {
-  try {
-    let { model, input, previous_response_id, temperature, max_output_tokens } = req.body;
-
-    let messages = [];
-    if (Array.isArray(input)) messages = input;
-    else if (typeof input === "string") messages = [{ role: "user", content: input }];
-    else messages = [{ role: "user", content: "" }];
-
-    if (!model || model === "auto" || model === "Auto") {
-      model = pickModel(messages);
-    }
-
-    const puterResponse = await puter.ai.chat(messages, {
-      model,
-      stream: false,
-      ...(temperature !== undefined && { temperature }),
-      ...(max_output_tokens !== undefined && { max_tokens: max_output_tokens }),
-    });
-
-    const contentText = extractContent(puterResponse.message?.content || puterResponse);
-
-    res.json({
-      id: `resp_${Date.now().toString(36)}`,
-      object: "response",
-      created: Math.floor(Date.now() / 1000),
-      model,
-      output: [
-        {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: contentText }],
-        },
-      ],
-      usage: puterResponse.usage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
-      ...(previous_response_id && { previous_response_id }),
-    });
-  } catch (err) {
-    console.error("Error in /v1/responses:", err.message);
-    res.status(500).json({ error: { message: err.message, type: "internal_error" } });
-  }
-});
-
-// ────────────────────────────────────────────────
 // Raw Puter endpoint
 // ────────────────────────────────────────────────
 app.post("/chat", async (req, res) => {
@@ -260,5 +248,4 @@ app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
   console.log(`✅ Health check: http://localhost:${PORT}/`);
   console.log(`✅ Models list:  http://localhost:${PORT}/v1/models`);
-  console.log(`✅ Alias:        http://localhost:${PORT}/models`);
 });
