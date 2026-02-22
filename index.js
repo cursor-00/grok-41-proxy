@@ -247,7 +247,7 @@ app.post("/chat", async (req, res) => {
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy server running on http://localhost:${PORT}`);
-  console.log("✅ Health check available at http://localhost:${PORT}/");
+  console.log(`✅ Health check available at http://localhost:${PORT}/`);
   console.log("Available routes:");
   console.log("  GET  /                          → Health check (for Cursor etc.)");
   console.log("  POST /chat                      → Raw Puter response");
