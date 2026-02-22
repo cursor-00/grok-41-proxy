@@ -17,16 +17,24 @@ console.log("Puter initialized, auth token present:", !!process.env.PUTER_AUTH_T
 
 const app = express();
 
+// ────────────────────────────────────────────────
+// CORS Middleware (replaces the old OPTIONS block)
+// ────────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+
+  next();
+});
+
 // Middleware
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
-
-// ────────────────────────────────────────────────
-// OPTIONS preflight (Extra safety for Accomplish & other clients)
-// ────────────────────────────────────────────────
-app.options("*", (req, res) => {
-  res.status(200).end();
-});
 
 // ────────────────────────────────────────────────
 // HEALTH CHECK
@@ -84,7 +92,7 @@ app.get("/v1/models", (req, res) => {
 });
 
 // ────────────────────────────────────────────────
-// /models alias (for clients that call /models without /v1)
+// /models alias (for Accomplish and other clients that skip /v1)
 // ────────────────────────────────────────────────
 app.get("/models", (req, res) => {
   res.json({
