@@ -11,7 +11,7 @@ const __dirname = dirname(__filename);
 // Load environment variables
 config({ path: join(__dirname, ".env") });
 
-// Initialize Puter.js with your preferred method
+// Initialize Puter.js
 puter.setAuthToken(process.env.PUTER_AUTH_TOKEN);
 console.log("Puter initialized, auth token present:", !!process.env.PUTER_AUTH_TOKEN);
 
@@ -20,6 +20,25 @@ const app = express();
 // Middleware
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+// ────────────────────────────────────────────────
+// HEALTH CHECK - Very important for desktop agents (Cursor, etc.)
+// ────────────────────────────────────────────────
+app.get("/", (req, res) => {
+  res.json({
+    status: "OK",
+    service: "Puter Proxy",
+    version: "1.0",
+    message: "Puter.js OpenAI/Anthropic/Responses compatible proxy is running",
+    endpoints: [
+      "GET  /                          → Health check",
+      "POST /chat                      → Raw Puter response",
+      "POST /v1/chat/completions       → OpenAI Chat Completions",
+      "POST /v1/messages               → Anthropic Messages",
+      "POST /v1/responses              → OpenAI Responses API (new!)"
+    ]
+  });
+});
 
 // Helper to extract text content from various response formats
 function extractContent(content) {
@@ -138,7 +157,6 @@ app.post("/v1/responses", async (req, res) => {
   try {
     let { model, input, stream = false, previous_response_id, temperature, max_output_tokens } = req.body;
 
-    // Convert OpenAI `input` to messages array + auto model selection
     let messages = [];
     if (Array.isArray(input)) {
       messages = input;
@@ -228,10 +246,12 @@ app.post("/chat", async (req, res) => {
 // Start server
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
-  console.log(`Puter proxy server running on http://localhost:${PORT}`);
+  console.log(`🚀 Puter proxy server running on http://localhost:${PORT}`);
+  console.log("✅ Health check available at http://localhost:${PORT}/");
   console.log("Available routes:");
-  console.log("  POST /chat                  → Raw Puter response (auto-routing)");
-  console.log("  POST /v1/chat/completions   → OpenAI Chat Completions");
-  console.log("  POST /v1/messages           → Anthropic Messages");
-  console.log("  POST /v1/responses          → OpenAI Responses API (new!)");
+  console.log("  GET  /                          → Health check (for Cursor etc.)");
+  console.log("  POST /chat                      → Raw Puter response");
+  console.log("  POST /v1/chat/completions       → OpenAI Chat Completions");
+  console.log("  POST /v1/messages               → Anthropic Messages");
+  console.log("  POST /v1/responses              → OpenAI Responses API");
 });
