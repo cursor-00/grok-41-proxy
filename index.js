@@ -69,8 +69,8 @@ app.get("/", (req, res) => {
   res.json({
     status: "OK",
     service: "Puter Proxy for Accomplish",
-    version: "1.8-clean-alias",
-    message: "Supports both /responses and /v1/responses"
+    version: "1.9-full-fix",
+    message: "Improved responses handler + full error logging"
   });
 });
 
@@ -86,7 +86,7 @@ function extractContent(content) {
 }
 
 // ────────────────────────────────────────────────
-// Reusable Responses Handler (used by both routes)
+// Reusable Responses Handler (fixed)
 // ────────────────────────────────────────────────
 async function handleResponses(req, res) {
   try {
@@ -97,14 +97,24 @@ async function handleResponses(req, res) {
 
     console.log(`[Router] ${originalModel} → ${model}`);
 
-    if (!originalModel || originalModel === "auto" || originalModel === "Auto") {
-      model = pickModel(input || []);
+    // Safer input → messages conversion for Accomplish format
+    let messages = [];
+    if (Array.isArray(input)) {
+      messages = input.map(msg => ({
+        role: msg.role || "user",
+        content: Array.isArray(msg.content)
+          ? msg.content.map(c => c.text || "").join("")
+          : msg.content
+      }));
+    } else if (typeof input === "string") {
+      messages = [{ role: "user", content: input }];
+    } else {
+      messages = [{ role: "user", content: "" }];
     }
 
-    let messages = [];
-    if (Array.isArray(input)) messages = input;
-    else if (typeof input === "string") messages = [{ role: "user", content: input }];
-    else messages = [{ role: "user", content: "" }];
+    if (!originalModel || originalModel === "auto" || originalModel === "Auto") {
+      model = pickModel(messages);
+    }
 
     const puterResponse = await puter.ai.chat(messages, {
       model,
@@ -131,16 +141,21 @@ async function handleResponses(req, res) {
       ...(previous_response_id && { previous_response_id }),
     });
   } catch (err) {
-    console.error("Error in responses:", err.message);
-    res.status(500).json({ error: { message: err.message, type: "internal_error" } });
+    console.error("FULL ERROR in responses:", err);
+    res.status(500).json({
+      error: {
+        message: err?.message || JSON.stringify(err),
+        type: "internal_error"
+      }
+    });
   }
 }
 
-// Wire both routes to the same handler
+// Wire both routes
 app.post("/v1/responses", handleResponses);
 app.post("/responses",    handleResponses);
 
-// Chat Completions, Anthropic & Raw routes (keep as before)
+// Other routes (unchanged)
 app.post("/v1/chat/completions", async (req, res) => { /* your current code */ });
 app.post("/v1/messages", async (req, res) => { /* your current code */ });
 app.post("/chat", async (req, res) => { /* your current code */ });
@@ -149,5 +164,5 @@ app.post("/chat", async (req, res) => { /* your current code */ });
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ Both /responses and /v1/responses are now supported`);
+  console.log(`✅ Full error logging + robust input handling active`);
 });
