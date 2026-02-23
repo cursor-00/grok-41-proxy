@@ -44,16 +44,10 @@ const openaiModelList = {
   ]
 };
 
-// Native routing
+// TEMPORARY FORCE — all requests go to a known working model
 function routeModel(model) {
-  const m = (model || "").toLowerCase();
-
-  if (m.includes("5.1") && m.includes("codex") && m.includes("max")) return "anthropic/claude-opus-4-6";
-  if (m.includes("5.1") && m.includes("codex") && m.includes("mini")) return "x-ai/grok-4-1-fast";
-  if (m.includes("5.2")) return "openai/gpt-5.2";
-  if (m.includes("nano")) return "openai/gpt-5-nano";
-
-  return "openai/gpt-5-nano";
+  console.log(`[Router] Requested: ${model} → FORCED to anthropic/claude-opus-4-6`);
+  return "anthropic/claude-opus-4-6";
 }
 
 // Bulletproof extractor
@@ -66,52 +60,7 @@ function extractContent(content) {
 }
 
 // ────────────────────────────────────────────────
-// /v1/chat/completions (kept clean)
-// ────────────────────────────────────────────────
-app.post("/v1/chat/completions", async (req, res) => {
-  try {
-    let { model, messages, temperature, max_tokens } = req.body;
-
-    const originalModel = model;
-    model = routeModel(model);
-
-    console.log(`[Router] ${originalModel} → ${model}`);
-
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({
-        error: { message: "No messages provided", type: "invalid_request_error" }
-      });
-    }
-
-    const puterResponse = await puter.ai.chat(messages, {
-      model,
-      stream: false,
-      ...(temperature !== undefined && { temperature }),
-      ...(max_tokens !== undefined && { max_tokens })
-    });
-
-    const contentText = extractContent(puterResponse.message?.content || puterResponse);
-
-    res.json({
-      id: `chatcmpl_${Date.now().toString(36)}`,
-      object: "chat.completion",
-      created: Math.floor(Date.now() / 1000),
-      model: originalModel,
-      choices: [{ index: 0, message: { role: "assistant", content: contentText }, finish_reason: "stop" }],
-      usage: {
-        prompt_tokens: puterResponse?.usage?.input_tokens || 0,
-        completion_tokens: puterResponse?.usage?.output_tokens || 0,
-        total_tokens: (puterResponse?.usage?.input_tokens || 0) + (puterResponse?.usage?.output_tokens || 0)
-      }
-    });
-  } catch (err) {
-    console.error("FULL ERROR in /v1/chat/completions:", err);
-    res.status(500).json({ error: { message: err?.message || "Internal error", type: "internal_error" } });
-  }
-});
-
-// ────────────────────────────────────────────────
-// /responses — Proper Responses API format + safer conversion
+// /responses — Proper Responses API format
 // ────────────────────────────────────────────────
 app.post("/responses", async (req, res) => {
   try {
@@ -119,7 +68,6 @@ app.post("/responses", async (req, res) => {
 
     const routedModel = routeModel(model);
 
-    // Safer conversion for structured input (your requested fix)
     const messages = Array.isArray(input)
       ? input.map(msg => ({
           role: msg.role || "user",
@@ -144,6 +92,9 @@ app.post("/responses", async (req, res) => {
       ...(max_output_tokens !== undefined && { max_tokens: max_output_tokens })
     });
 
+    // ← RAW DEBUG (this will show us the real Puter response)
+    console.log("Puter raw response:", JSON.stringify(puterResponse));
+
     const contentText = extractContent(puterResponse.message?.content || puterResponse);
 
     res.json({
@@ -153,6 +104,7 @@ app.post("/responses", async (req, res) => {
       model,
       output: [
         {
+          id: `msg_${Date.now().toString(36)}`,
           type: "message",
           role: "assistant",
           content: [{ type: "output_text", text: contentText }]
@@ -160,8 +112,7 @@ app.post("/responses", async (req, res) => {
       ],
       usage: {
         input_tokens: puterResponse?.usage?.input_tokens || 0,
-        output_tokens: puterResponse?.usage?.output_tokens || 0,
-        total_tokens: (puterResponse?.usage?.input_tokens || 0) + (puterResponse?.usage?.output_tokens || 0)
+        output_tokens: puterResponse?.usage?.output_tokens || 0
       }
     });
 
@@ -178,6 +129,7 @@ app.get("/v1/models", (req, res) => res.json(openaiModelList));
 app.get("/models",    (req, res) => res.json(openaiModelList));
 
 // Optional legacy routes
+app.post("/v1/chat/completions", async (req, res) => { /* your existing code */ });
 app.post("/v1/messages", async (req, res) => { /* your existing code */ });
 app.post("/chat", async (req, res) => { /* your existing code */ });
 
@@ -185,5 +137,5 @@ app.post("/chat", async (req, res) => { /* your existing code */ });
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ /responses now uses safe structured input conversion`);
+  console.log(`✅ ALL models forced to Claude Opus 4.6 for testing`);
 });
