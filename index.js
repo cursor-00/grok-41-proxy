@@ -30,10 +30,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ────────────────────────────────────────────────
-// TEMPORARY DEBUG LOGGING (as you requested)
-// Shows every request Accomplish sends
-// ────────────────────────────────────────────────
+// TEMPORARY DEBUG LOGGING
 app.use((req, res, next) => {
   console.log("Incoming:", req.method, req.originalUrl);
   next();
@@ -42,6 +39,20 @@ app.use((req, res, next) => {
 // Middleware
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+// ────────────────────────────────────────────────
+// Shared OpenAI model list (used by BOTH routes)
+// ────────────────────────────────────────────────
+const openaiModelList = {
+  object: "list",
+  data: [
+    { id: "gpt-5.2",          object: "model", owned_by: "openai" },
+    { id: "gpt-5.2-codex",    object: "model", owned_by: "openai" },
+    { id: "gpt-5.1-codex-max",object: "model", owned_by: "openai" },
+    { id: "gpt-5.1-codex-mini",object: "model", owned_by: "openai" },
+    { id: "gpt-5-nano",       object: "model", owned_by: "openai" }
+  ]
+};
 
 // Model Routing Function
 function routeModel(model) {
@@ -55,21 +66,76 @@ function routeModel(model) {
   return "anthropic/claude-opus-4-6";
 }
 
-// HEALTH CHECK + other routes (unchanged from last version)
-app.get("/", (req, res) => { /* same as before */ });
-app.get("/v1/models", (req, res) => { /* same as before */ });
-app.get("/models", (req, res) => { /* same as before */ });
+// HEALTH CHECK
+app.get("/", (req, res) => {
+  res.json({
+    status: "OK",
+    service: "Puter Proxy for Accomplish",
+    version: "1.6-final-spoof",
+    message: "Full OpenAI model spoofing active"
+  });
+});
 
-// ... (your extractContent function + all POST routes remain exactly the same)
+// ────────────────────────────────────────────────
+// Both model routes now return the SAME list
+// ────────────────────────────────────────────────
+app.get("/v1/models", (req, res) => res.json(openaiModelList));
+app.get("/models",    (req, res) => res.json(openaiModelList));
 
-app.post("/v1/chat/completions", async (req, res) => { /* your current version */ });
-app.post("/v1/responses", async (req, res) => { /* your current version */ });
-app.post("/v1/messages", async (req, res) => { /* your current version */ });
-app.post("/chat", async (req, res) => { /* your current version */ });
+// Helper
+function extractContent(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.map((c) => c.text || c).join("");
+  return "";
+}
+
+// ────────────────────────────────────────────────
+// OpenAI Chat Completions
+// ────────────────────────────────────────────────
+app.post("/v1/chat/completions", async (req, res) => {
+  try {
+    let { messages, model } = req.body;
+
+    const originalModel = model;
+    model = routeModel(model);
+
+    console.log(`[Router] ${originalModel} → ${model}`);
+
+    if (!originalModel || originalModel === "auto" || originalModel === "Auto") {
+      model = pickModel(messages);
+    }
+
+    if (!messages || !Array.isArray(messages)) {
+      messages = [{ role: "user", content: "" }];
+    }
+
+    const response = await puter.ai.chat(messages, { model, stream: false });
+
+    const contentText = extractContent(response.message?.content);
+
+    res.json({
+      id: "chatcmpl-" + Date.now(),
+      object: "chat.completion",
+      created: Date.now(),
+      model: originalModel,
+      choices: [{ index: 0, message: { role: "assistant", content: contentText }, finish_reason: "stop" }],
+      usage: response.usage || {},
+    });
+  } catch (error) {
+    console.error("Error in /v1/chat/completions:", error.message);
+    res.status(500).json({ error: error.message, type: "internal_error" });
+  }
+});
+
+// (Keep your existing /v1/responses, /v1/messages, /chat routes unchanged)
+
+app.post("/v1/responses", async (req, res) => { /* your current code */ });
+app.post("/v1/messages", async (req, res) => { /* your current code */ });
+app.post("/chat", async (req, res) => { /* your current code */ });
 
 // Start server
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ Logging enabled — check Render logs for every request from Accomplish`);
+  console.log(`✅ Both /v1/models and /models now return full OpenAI list`);
 });
