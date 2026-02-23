@@ -17,26 +17,18 @@ console.log("Puter initialized, auth token present:", !!process.env.PUTER_AUTH_T
 
 const app = express();
 
-// CORS Middleware
+// CORS + Debug Logging
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
+  if (req.method === "OPTIONS") return res.sendStatus(200);
 
-  next();
-});
-
-// TEMPORARY DEBUG LOGGING
-app.use((req, res, next) => {
   console.log("Incoming:", req.method, req.originalUrl);
   next();
 });
 
-// Middleware
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
@@ -52,67 +44,68 @@ const openaiModelList = {
   ]
 };
 
-// Correct routeModel (nano + 5.2 native)
+// Correct native routing (nano + 5.2 stay native)
 function routeModel(model) {
   const m = (model || "").toLowerCase();
 
-  if (m.includes("5.1") && m.includes("codex") && m.includes("max"))
-    return "anthropic/claude-opus-4-6";
-
-  if (m.includes("5.1") && m.includes("codex") && m.includes("mini"))
-    return "x-ai/grok-4-1-fast";
-
+  if (m.includes("5.1") && m.includes("codex") && m.includes("max")) return "anthropic/claude-opus-4-6";
+  if (m.includes("5.1") && m.includes("codex") && m.includes("mini")) return "x-ai/grok-4-1-fast";
   if (m.includes("5.2")) return "openai/gpt-5.2";
   if (m.includes("nano")) return "openai/gpt-5-nano";
 
   return "openai/gpt-5-nano";
 }
 
-// HEALTH CHECK
-app.get("/", (req, res) => {
-  res.json({
-    status: "OK",
-    service: "Puter Proxy for Accomplish",
-    version: "2.1-bulletproof-extractor",
-    message: "All fixes applied"
-  });
-});
-
-// Model routes
-app.get("/v1/models", (req, res) => res.json(openaiModelList));
-app.get("/models",    (req, res) => res.json(openaiModelList));
-
-// ────────────────────────────────────────────────
-// BULLETPROOF extractContent (as you requested)
-// ────────────────────────────────────────────────
+// Bulletproof content extractor
 function extractContent(content) {
   if (!content) return "";
-
   if (typeof content === "string") return content;
-
   if (Array.isArray(content)) {
-    return content
-      .map((c) =>
-        c?.text ||
-        c?.output_text ||
-        c?.input_text ||
-        c?.content ||
-        ""
-      )
-      .join("");
+    return content.map(c => c?.text || c?.output_text || c?.content || "").join("");
   }
-
   if (typeof content === "object") {
-    return (
-      content.text ||
-      content.output_text ||
-      content.input_text ||
-      content.content ||
-      ""
-    );
+    return content.text || content.output_text || content.content || "";
+  }
+  return String(content);
+}
+
+// ────────────────────────────────────────────────
+// STRICT TRANSFORMER (no fake "Hello" content)
+// ────────────────────────────────────────────────
+function normalizeInputToMessages(input) {
+  let messages = [];
+
+  if (Array.isArray(input) && input.length > 0) {
+    messages = input
+      .map(msg => {
+        let contentStr = "";
+
+        if (Array.isArray(msg.content)) {
+          contentStr = msg.content
+            .map(c => {
+              if (typeof c === "string") return c;
+              if (c && typeof c === "object") return c.text || c.output_text || c.content || "";
+              return "";
+            })
+            .join("");
+        } else if (typeof msg.content === "string") {
+          contentStr = msg.content;
+        }
+
+        const clean = contentStr.trim();
+        if (!clean) return null;
+
+        return {
+          role: ["user", "assistant", "system"].includes(msg.role) ? msg.role : "user",
+          content: clean
+        };
+      })
+      .filter(Boolean); // remove null/empty entries
+  } else if (typeof input === "string" && input.trim()) {
+    messages = [{ role: "user", content: input.trim() }];
   }
 
-  return "";
+  return messages;
 }
 
 // Reusable Responses Handler
@@ -125,27 +118,16 @@ async function handleResponses(req, res) {
 
     console.log(`[Router] ${originalModel} → ${model}`);
 
-    let messages = [];
-    if (Array.isArray(input)) {
-      messages = input.map(msg => ({
-        role: msg.role || "user",
-        content: Array.isArray(msg.content)
-          ? msg.content.map(c => c.text || "").join("")
-          : msg.content
-      }));
-    } else if (typeof input === "string") {
-      messages = [{ role: "user", content: input }];
-    } else {
+    const messages = normalizeInputToMessages(input);
+
+    // Enforce no empty payload
+    if (!messages || messages.length === 0) {
       return res.status(400).json({
         error: {
-          message: "Invalid or empty input",
+          message: "No valid user content",
           type: "invalid_request_error"
         }
       });
-    }
-
-    if (!originalModel || originalModel === "auto" || originalModel === "Auto") {
-      model = pickModel(messages);
     }
 
     const puterResponse = await puter.ai.chat(messages, {
@@ -183,11 +165,14 @@ async function handleResponses(req, res) {
   }
 }
 
-// Wire both responses routes
+// Routes
+app.get("/v1/models", (req, res) => res.json(openaiModelList));
+app.get("/models",    (req, res) => res.json(openaiModelList));
+
 app.post("/v1/responses", handleResponses);
 app.post("/responses",    handleResponses);
 
-// Other routes (keep your existing ones)
+// Other routes (unchanged)
 app.post("/v1/chat/completions", async (req, res) => { /* your current code */ });
 app.post("/v1/messages", async (req, res) => { /* your current code */ });
 app.post("/chat", async (req, res) => { /* your current code */ });
@@ -196,5 +181,5 @@ app.post("/chat", async (req, res) => { /* your current code */ });
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ Bulletproof extractor + native nano routing active`);
+  console.log(`✅ Strict transformer active — no fake content injected`);
 });
