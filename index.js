@@ -52,16 +52,20 @@ const openaiModelList = {
   ]
 };
 
-// Model Routing Function
+// Correct routeModel (nano + 5.2 native)
 function routeModel(model) {
   const m = (model || "").toLowerCase();
 
-  if (m.includes("5.1") && m.includes("max")) return "anthropic/claude-opus-4-6";
-  if (m.includes("5.1") && m.includes("mini")) return "x-ai/grok-4-1-fast";
-  if (m.includes("5.2")) return "anthropic/claude-opus-4-6";
-  if (m.includes("nano")) return "anthropic/claude-opus-4-6";
+  if (m.includes("5.1") && m.includes("codex") && m.includes("max"))
+    return "anthropic/claude-opus-4-6";
 
-  return "anthropic/claude-opus-4-6";
+  if (m.includes("5.1") && m.includes("codex") && m.includes("mini"))
+    return "x-ai/grok-4-1-fast";
+
+  if (m.includes("5.2")) return "openai/gpt-5.2";
+  if (m.includes("nano")) return "openai/gpt-5-nano";
+
+  return "openai/gpt-5-nano";
 }
 
 // HEALTH CHECK
@@ -69,8 +73,8 @@ app.get("/", (req, res) => {
   res.json({
     status: "OK",
     service: "Puter Proxy for Accomplish",
-    version: "1.9-empty-input-fix",
-    message: "Empty input now returns clean 400"
+    version: "2.1-bulletproof-extractor",
+    message: "All fixes applied"
   });
 });
 
@@ -78,16 +82,40 @@ app.get("/", (req, res) => {
 app.get("/v1/models", (req, res) => res.json(openaiModelList));
 app.get("/models",    (req, res) => res.json(openaiModelList));
 
-// Helper
+// ────────────────────────────────────────────────
+// BULLETPROOF extractContent (as you requested)
+// ────────────────────────────────────────────────
 function extractContent(content) {
+  if (!content) return "";
+
   if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map((c) => c.text || c).join("");
+
+  if (Array.isArray(content)) {
+    return content
+      .map((c) =>
+        c?.text ||
+        c?.output_text ||
+        c?.input_text ||
+        c?.content ||
+        ""
+      )
+      .join("");
+  }
+
+  if (typeof content === "object") {
+    return (
+      content.text ||
+      content.output_text ||
+      content.input_text ||
+      content.content ||
+      ""
+    );
+  }
+
   return "";
 }
 
-// ────────────────────────────────────────────────
-// Reusable Responses Handler (with improved empty input handling)
-// ────────────────────────────────────────────────
+// Reusable Responses Handler
 async function handleResponses(req, res) {
   try {
     let { model, input, previous_response_id, temperature, max_output_tokens } = req.body;
@@ -97,7 +125,6 @@ async function handleResponses(req, res) {
 
     console.log(`[Router] ${originalModel} → ${model}`);
 
-    // Safer input → messages conversion
     let messages = [];
     if (Array.isArray(input)) {
       messages = input.map(msg => ({
@@ -109,7 +136,6 @@ async function handleResponses(req, res) {
     } else if (typeof input === "string") {
       messages = [{ role: "user", content: input }];
     } else {
-      // ← NEW: Return clean 400 instead of sending empty message
       return res.status(400).json({
         error: {
           message: "Invalid or empty input",
@@ -157,11 +183,11 @@ async function handleResponses(req, res) {
   }
 }
 
-// Wire both routes
+// Wire both responses routes
 app.post("/v1/responses", handleResponses);
 app.post("/responses",    handleResponses);
 
-// Other routes (keep unchanged)
+// Other routes (keep your existing ones)
 app.post("/v1/chat/completions", async (req, res) => { /* your current code */ });
 app.post("/v1/messages", async (req, res) => { /* your current code */ });
 app.post("/chat", async (req, res) => { /* your current code */ });
@@ -170,5 +196,5 @@ app.post("/chat", async (req, res) => { /* your current code */ });
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ Empty input now returns clean 400 error`);
+  console.log(`✅ Bulletproof extractor + native nano routing active`);
 });
