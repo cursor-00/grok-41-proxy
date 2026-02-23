@@ -69,8 +69,8 @@ app.get("/", (req, res) => {
   res.json({
     status: "OK",
     service: "Puter Proxy for Accomplish",
-    version: "1.9-full-fix",
-    message: "Improved responses handler + full error logging"
+    version: "1.9-empty-input-fix",
+    message: "Empty input now returns clean 400"
   });
 });
 
@@ -86,7 +86,7 @@ function extractContent(content) {
 }
 
 // ────────────────────────────────────────────────
-// Reusable Responses Handler (fixed)
+// Reusable Responses Handler (with improved empty input handling)
 // ────────────────────────────────────────────────
 async function handleResponses(req, res) {
   try {
@@ -97,7 +97,7 @@ async function handleResponses(req, res) {
 
     console.log(`[Router] ${originalModel} → ${model}`);
 
-    // Safer input → messages conversion for Accomplish format
+    // Safer input → messages conversion
     let messages = [];
     if (Array.isArray(input)) {
       messages = input.map(msg => ({
@@ -109,7 +109,13 @@ async function handleResponses(req, res) {
     } else if (typeof input === "string") {
       messages = [{ role: "user", content: input }];
     } else {
-      messages = [{ role: "user", content: "" }];
+      // ← NEW: Return clean 400 instead of sending empty message
+      return res.status(400).json({
+        error: {
+          message: "Invalid or empty input",
+          type: "invalid_request_error"
+        }
+      });
     }
 
     if (!originalModel || originalModel === "auto" || originalModel === "Auto") {
@@ -155,7 +161,7 @@ async function handleResponses(req, res) {
 app.post("/v1/responses", handleResponses);
 app.post("/responses",    handleResponses);
 
-// Other routes (unchanged)
+// Other routes (keep unchanged)
 app.post("/v1/chat/completions", async (req, res) => { /* your current code */ });
 app.post("/v1/messages", async (req, res) => { /* your current code */ });
 app.post("/chat", async (req, res) => { /* your current code */ });
@@ -164,5 +170,5 @@ app.post("/chat", async (req, res) => { /* your current code */ });
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ Full error logging + robust input handling active`);
+  console.log(`✅ Empty input now returns clean 400 error`);
 });
