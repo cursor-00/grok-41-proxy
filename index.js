@@ -69,12 +69,12 @@ app.get("/", (req, res) => {
   res.json({
     status: "OK",
     service: "Puter Proxy for Accomplish",
-    version: "1.7-responses-alias",
+    version: "1.8-clean-alias",
     message: "Supports both /responses and /v1/responses"
   });
 });
 
-// Model routes (both point to same list)
+// Model routes
 app.get("/v1/models", (req, res) => res.json(openaiModelList));
 app.get("/models",    (req, res) => res.json(openaiModelList));
 
@@ -86,9 +86,9 @@ function extractContent(content) {
 }
 
 // ────────────────────────────────────────────────
-// OpenAI Responses API (main handler)
+// Reusable Responses Handler (used by both routes)
 // ────────────────────────────────────────────────
-app.post("/v1/responses", async (req, res) => {
+async function handleResponses(req, res) {
   try {
     let { model, input, previous_response_id, temperature, max_output_tokens } = req.body;
 
@@ -131,23 +131,17 @@ app.post("/v1/responses", async (req, res) => {
       ...(previous_response_id && { previous_response_id }),
     });
   } catch (err) {
-    console.error("Error in /v1/responses:", err.message);
+    console.error("Error in responses:", err.message);
     res.status(500).json({ error: { message: err.message, type: "internal_error" } });
   }
-});
+}
 
-// ────────────────────────────────────────────────
-// Alias for Accomplish: POST /responses → POST /v1/responses
-// ────────────────────────────────────────────────
-app.post("/responses", async (req, res) => {
-  req.url = "/v1/responses";
-  app._router.handle(req, res);
-});
+// Wire both routes to the same handler
+app.post("/v1/responses", handleResponses);
+app.post("/responses",    handleResponses);
 
-// Chat Completions (unchanged)
+// Chat Completions, Anthropic & Raw routes (keep as before)
 app.post("/v1/chat/completions", async (req, res) => { /* your current code */ });
-
-// Anthropic & Raw (unchanged)
 app.post("/v1/messages", async (req, res) => { /* your current code */ });
 app.post("/chat", async (req, res) => { /* your current code */ });
 
@@ -155,5 +149,5 @@ app.post("/chat", async (req, res) => { /* your current code */ });
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ Supports /responses (no /v1) for Accomplish`);
+  console.log(`✅ Both /responses and /v1/responses are now supported`);
 });
