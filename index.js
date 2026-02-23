@@ -40,17 +40,15 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// ────────────────────────────────────────────────
-// Shared OpenAI model list (used by BOTH routes)
-// ────────────────────────────────────────────────
+// Shared OpenAI model list
 const openaiModelList = {
   object: "list",
   data: [
-    { id: "gpt-5.2",          object: "model", owned_by: "openai" },
-    { id: "gpt-5.2-codex",    object: "model", owned_by: "openai" },
-    { id: "gpt-5.1-codex-max",object: "model", owned_by: "openai" },
-    { id: "gpt-5.1-codex-mini",object: "model", owned_by: "openai" },
-    { id: "gpt-5-nano",       object: "model", owned_by: "openai" }
+    { id: "gpt-5.2", object: "model", owned_by: "openai" },
+    { id: "gpt-5.2-codex", object: "model", owned_by: "openai" },
+    { id: "gpt-5.1-codex-max", object: "model", owned_by: "openai" },
+    { id: "gpt-5.1-codex-mini", object: "model", owned_by: "openai" },
+    { id: "gpt-5-nano", object: "model", owned_by: "openai" }
   ]
 };
 
@@ -71,14 +69,12 @@ app.get("/", (req, res) => {
   res.json({
     status: "OK",
     service: "Puter Proxy for Accomplish",
-    version: "1.6-final-spoof",
-    message: "Full OpenAI model spoofing active"
+    version: "1.7-responses-alias",
+    message: "Supports both /responses and /v1/responses"
   });
 });
 
-// ────────────────────────────────────────────────
-// Both model routes now return the SAME list
-// ────────────────────────────────────────────────
+// Model routes (both point to same list)
 app.get("/v1/models", (req, res) => res.json(openaiModelList));
 app.get("/models",    (req, res) => res.json(openaiModelList));
 
@@ -90,11 +86,11 @@ function extractContent(content) {
 }
 
 // ────────────────────────────────────────────────
-// OpenAI Chat Completions
+// OpenAI Responses API (main handler)
 // ────────────────────────────────────────────────
-app.post("/v1/chat/completions", async (req, res) => {
+app.post("/v1/responses", async (req, res) => {
   try {
-    let { messages, model } = req.body;
+    let { model, input, previous_response_id, temperature, max_output_tokens } = req.body;
 
     const originalModel = model;
     model = routeModel(model);
@@ -102,34 +98,56 @@ app.post("/v1/chat/completions", async (req, res) => {
     console.log(`[Router] ${originalModel} → ${model}`);
 
     if (!originalModel || originalModel === "auto" || originalModel === "Auto") {
-      model = pickModel(messages);
+      model = pickModel(input || []);
     }
 
-    if (!messages || !Array.isArray(messages)) {
-      messages = [{ role: "user", content: "" }];
-    }
+    let messages = [];
+    if (Array.isArray(input)) messages = input;
+    else if (typeof input === "string") messages = [{ role: "user", content: input }];
+    else messages = [{ role: "user", content: "" }];
 
-    const response = await puter.ai.chat(messages, { model, stream: false });
+    const puterResponse = await puter.ai.chat(messages, {
+      model,
+      stream: false,
+      ...(temperature !== undefined && { temperature }),
+      ...(max_output_tokens !== undefined && { max_tokens: max_output_tokens }),
+    });
 
-    const contentText = extractContent(response.message?.content);
+    const contentText = extractContent(puterResponse.message?.content || puterResponse);
 
     res.json({
-      id: "chatcmpl-" + Date.now(),
-      object: "chat.completion",
-      created: Date.now(),
+      id: `resp_${Date.now().toString(36)}`,
+      object: "response",
+      created: Math.floor(Date.now() / 1000),
       model: originalModel,
-      choices: [{ index: 0, message: { role: "assistant", content: contentText }, finish_reason: "stop" }],
-      usage: response.usage || {},
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: contentText }],
+        },
+      ],
+      usage: puterResponse.usage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      ...(previous_response_id && { previous_response_id }),
     });
-  } catch (error) {
-    console.error("Error in /v1/chat/completions:", error.message);
-    res.status(500).json({ error: error.message, type: "internal_error" });
+  } catch (err) {
+    console.error("Error in /v1/responses:", err.message);
+    res.status(500).json({ error: { message: err.message, type: "internal_error" } });
   }
 });
 
-// (Keep your existing /v1/responses, /v1/messages, /chat routes unchanged)
+// ────────────────────────────────────────────────
+// Alias for Accomplish: POST /responses → POST /v1/responses
+// ────────────────────────────────────────────────
+app.post("/responses", async (req, res) => {
+  req.url = "/v1/responses";
+  app._router.handle(req, res);
+});
 
-app.post("/v1/responses", async (req, res) => { /* your current code */ });
+// Chat Completions (unchanged)
+app.post("/v1/chat/completions", async (req, res) => { /* your current code */ });
+
+// Anthropic & Raw (unchanged)
 app.post("/v1/messages", async (req, res) => { /* your current code */ });
 app.post("/chat", async (req, res) => { /* your current code */ });
 
@@ -137,5 +155,5 @@ app.post("/chat", async (req, res) => { /* your current code */ });
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ Both /v1/models and /models now return full OpenAI list`);
+  console.log(`✅ Supports /responses (no /v1) for Accomplish`);
 });
