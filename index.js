@@ -32,7 +32,7 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// Shared OpenAI model list
+// Shared OpenAI model list (for Accomplish probing)
 const openaiModelList = {
   object: "list",
   data: [
@@ -44,7 +44,7 @@ const openaiModelList = {
   ]
 };
 
-// Native routing (nano + 5.2 stay native)
+// Native routing (nano + 5.2 stay native on Puter)
 function routeModel(model) {
   const m = (model || "").toLowerCase();
 
@@ -69,57 +69,21 @@ function extractContent(content) {
   return String(content);
 }
 
-// Strict transformer (no fake content)
-function normalizeInputToMessages(input) {
-  let messages = [];
-
-  if (Array.isArray(input) && input.length > 0) {
-    messages = input
-      .map(msg => {
-        let contentStr = "";
-
-        if (Array.isArray(msg.content)) {
-          contentStr = msg.content
-            .map(c => (typeof c === "string" ? c : c?.text || c?.output_text || c?.content || ""))
-            .join("");
-        } else if (typeof msg.content === "string") {
-          contentStr = msg.content;
-        }
-
-        const clean = contentStr.trim();
-        if (!clean) return null;
-
-        return {
-          role: ["user", "assistant", "system"].includes(msg.role) ? msg.role : "user",
-          content: clean
-        };
-      })
-      .filter(Boolean);
-  } else if (typeof input === "string" && input.trim()) {
-    messages = [{ role: "user", content: input.trim() }];
-  }
-
-  return messages;
-}
-
-// Reusable handler — now returns Chat Completions format
-async function handleResponses(req, res) {
+// ────────────────────────────────────────────────
+// Main Chat Completions Handler (EVERYTHING goes here now)
+// ────────────────────────────────────────────────
+app.post("/v1/chat/completions", async (req, res) => {
   try {
-    let { model, input, previous_response_id, temperature, max_output_tokens } = req.body;
+    let { model, messages, temperature, max_tokens } = req.body;
 
     const originalModel = model;
     model = routeModel(model);
 
     console.log(`[Router] ${originalModel} → ${model}`);
 
-    const messages = normalizeInputToMessages(input);
-
-    if (!messages || messages.length === 0) {
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({
-        error: {
-          message: "No valid user content",
-          type: "invalid_request_error"
-        }
+        error: { message: "No messages provided", type: "invalid_request_error" }
       });
     }
 
@@ -127,12 +91,20 @@ async function handleResponses(req, res) {
       model,
       stream: false,
       ...(temperature !== undefined && { temperature }),
-      ...(max_output_tokens !== undefined && { max_tokens: max_output_tokens }),
+      ...(max_tokens !== undefined && { max_tokens })
     });
+
+    if (puterResponse?.success === false) {
+      return res.status(502).json({
+        error: {
+          message: puterResponse.error || "Upstream model error",
+          type: "provider_error"
+        }
+      });
+    }
 
     const contentText = extractContent(puterResponse.message?.content || puterResponse);
 
-    // ✅ CHAT COMPLETIONS FORMAT (as requested)
     res.json({
       id: `chatcmpl_${Date.now().toString(36)}`,
       object: "chat.completion",
@@ -141,45 +113,38 @@ async function handleResponses(req, res) {
       choices: [
         {
           index: 0,
-          message: {
-            role: "assistant",
-            content: contentText
-          },
+          message: { role: "assistant", content: contentText },
           finish_reason: "stop"
         }
       ],
-      usage: puterResponse.usage || {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0
+      usage: {
+        prompt_tokens: puterResponse?.usage?.input_tokens || 0,
+        completion_tokens: puterResponse?.usage?.output_tokens || 0,
+        total_tokens:
+          (puterResponse?.usage?.input_tokens || 0) +
+          (puterResponse?.usage?.output_tokens || 0)
       }
     });
+
   } catch (err) {
-    console.error("FULL ERROR in responses:", err);
+    console.error("FULL ERROR in /v1/chat/completions:", err);
     res.status(500).json({
-      error: {
-        message: err?.message || JSON.stringify(err),
-        type: "internal_error"
-      }
+      error: { message: err?.message || "Internal error", type: "internal_error" }
     });
   }
-}
+});
 
-// Routes
+// Model list routes
 app.get("/v1/models", (req, res) => res.json(openaiModelList));
 app.get("/models",    (req, res) => res.json(openaiModelList));
 
-app.post("/v1/responses", handleResponses);
-app.post("/responses",    handleResponses);
-
-// Other routes (unchanged)
-app.post("/v1/chat/completions", async (req, res) => { /* your current code */ });
-app.post("/v1/messages", async (req, res) => { /* your current code */ });
-app.post("/chat", async (req, res) => { /* your current code */ });
+// Keep these if you still need them (Anthropic + raw)
+app.post("/v1/messages", async (req, res) => { /* your existing code */ });
+app.post("/chat", async (req, res) => { /* your existing code */ });
 
 // Start server
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ /responses now returns Chat Completions format`);
+  console.log(`✅ All traffic now routed through /v1/chat/completions`);
 });
