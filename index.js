@@ -32,7 +32,7 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// Shared OpenAI model list (for Accomplish probing)
+// Shared OpenAI model list
 const openaiModelList = {
   object: "list",
   data: [
@@ -44,7 +44,7 @@ const openaiModelList = {
   ]
 };
 
-// Native routing (nano + 5.2 stay native on Puter)
+// Native routing
 function routeModel(model) {
   const m = (model || "").toLowerCase();
 
@@ -60,17 +60,13 @@ function routeModel(model) {
 function extractContent(content) {
   if (!content) return "";
   if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content.map(c => c?.text || c?.output_text || c?.content || "").join("");
-  }
-  if (typeof content === "object") {
-    return content.text || content.output_text || content.content || "";
-  }
+  if (Array.isArray(content)) return content.map(c => c?.text || c?.output_text || c?.content || "").join("");
+  if (typeof content === "object") return content.text || content.output_text || content.content || "";
   return String(content);
 }
 
 // ────────────────────────────────────────────────
-// Main Chat Completions Handler (EVERYTHING goes here now)
+// /v1/chat/completions (kept clean)
 // ────────────────────────────────────────────────
 app.post("/v1/chat/completions", async (req, res) => {
   try {
@@ -94,15 +90,6 @@ app.post("/v1/chat/completions", async (req, res) => {
       ...(max_tokens !== undefined && { max_tokens })
     });
 
-    if (puterResponse?.success === false) {
-      return res.status(502).json({
-        error: {
-          message: puterResponse.error || "Upstream model error",
-          type: "provider_error"
-        }
-      });
-    }
-
     const contentText = extractContent(puterResponse.message?.content || puterResponse);
 
     res.json({
@@ -110,24 +97,76 @@ app.post("/v1/chat/completions", async (req, res) => {
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model: originalModel,
-      choices: [
-        {
-          index: 0,
-          message: { role: "assistant", content: contentText },
-          finish_reason: "stop"
-        }
-      ],
+      choices: [{ index: 0, message: { role: "assistant", content: contentText }, finish_reason: "stop" }],
       usage: {
         prompt_tokens: puterResponse?.usage?.input_tokens || 0,
         completion_tokens: puterResponse?.usage?.output_tokens || 0,
-        total_tokens:
-          (puterResponse?.usage?.input_tokens || 0) +
-          (puterResponse?.usage?.output_tokens || 0)
+        total_tokens: (puterResponse?.usage?.input_tokens || 0) + (puterResponse?.usage?.output_tokens || 0)
+      }
+    });
+  } catch (err) {
+    console.error("FULL ERROR in /v1/chat/completions:", err);
+    res.status(500).json({ error: { message: err?.message || "Internal error", type: "internal_error" } });
+  }
+});
+
+// ────────────────────────────────────────────────
+// /responses — Proper Responses API format + safer conversion
+// ────────────────────────────────────────────────
+app.post("/responses", async (req, res) => {
+  try {
+    const { model, input, temperature, max_output_tokens } = req.body;
+
+    const routedModel = routeModel(model);
+
+    // Safer conversion for structured input (your requested fix)
+    const messages = Array.isArray(input)
+      ? input.map(msg => ({
+          role: msg.role || "user",
+          content: Array.isArray(msg.content)
+            ? msg.content.map(c => c.text || c.output_text || "").join("")
+            : msg.content
+        }))
+      : typeof input === "string"
+      ? [{ role: "user", content: input }]
+      : [];
+
+    if (!messages.length) {
+      return res.status(400).json({
+        error: { message: "No valid input", type: "invalid_request_error" }
+      });
+    }
+
+    const puterResponse = await puter.ai.chat(messages, {
+      model: routedModel,
+      stream: false,
+      ...(temperature !== undefined && { temperature }),
+      ...(max_output_tokens !== undefined && { max_tokens: max_output_tokens })
+    });
+
+    const contentText = extractContent(puterResponse.message?.content || puterResponse);
+
+    res.json({
+      id: `resp_${Date.now().toString(36)}`,
+      object: "response",
+      created: Math.floor(Date.now() / 1000),
+      model,
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: contentText }]
+        }
+      ],
+      usage: {
+        input_tokens: puterResponse?.usage?.input_tokens || 0,
+        output_tokens: puterResponse?.usage?.output_tokens || 0,
+        total_tokens: (puterResponse?.usage?.input_tokens || 0) + (puterResponse?.usage?.output_tokens || 0)
       }
     });
 
   } catch (err) {
-    console.error("FULL ERROR in /v1/chat/completions:", err);
+    console.error("FULL ERROR in /responses:", err);
     res.status(500).json({
       error: { message: err?.message || "Internal error", type: "internal_error" }
     });
@@ -138,7 +177,7 @@ app.post("/v1/chat/completions", async (req, res) => {
 app.get("/v1/models", (req, res) => res.json(openaiModelList));
 app.get("/models",    (req, res) => res.json(openaiModelList));
 
-// Keep these if you still need them (Anthropic + raw)
+// Optional legacy routes
 app.post("/v1/messages", async (req, res) => { /* your existing code */ });
 app.post("/chat", async (req, res) => { /* your existing code */ });
 
@@ -146,5 +185,5 @@ app.post("/chat", async (req, res) => { /* your existing code */ });
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ All traffic now routed through /v1/chat/completions`);
+  console.log(`✅ /responses now uses safe structured input conversion`);
 });
