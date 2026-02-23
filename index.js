@@ -44,7 +44,7 @@ const openaiModelList = {
   ]
 };
 
-// Correct native routing (nano + 5.2 stay native)
+// Native routing (nano + 5.2 stay native)
 function routeModel(model) {
   const m = (model || "").toLowerCase();
 
@@ -56,7 +56,7 @@ function routeModel(model) {
   return "openai/gpt-5-nano";
 }
 
-// Bulletproof content extractor
+// Bulletproof extractor
 function extractContent(content) {
   if (!content) return "";
   if (typeof content === "string") return content;
@@ -69,9 +69,7 @@ function extractContent(content) {
   return String(content);
 }
 
-// ────────────────────────────────────────────────
-// STRICT TRANSFORMER (no fake "Hello" content)
-// ────────────────────────────────────────────────
+// Strict transformer (no fake content)
 function normalizeInputToMessages(input) {
   let messages = [];
 
@@ -82,11 +80,7 @@ function normalizeInputToMessages(input) {
 
         if (Array.isArray(msg.content)) {
           contentStr = msg.content
-            .map(c => {
-              if (typeof c === "string") return c;
-              if (c && typeof c === "object") return c.text || c.output_text || c.content || "";
-              return "";
-            })
+            .map(c => (typeof c === "string" ? c : c?.text || c?.output_text || c?.content || ""))
             .join("");
         } else if (typeof msg.content === "string") {
           contentStr = msg.content;
@@ -100,7 +94,7 @@ function normalizeInputToMessages(input) {
           content: clean
         };
       })
-      .filter(Boolean); // remove null/empty entries
+      .filter(Boolean);
   } else if (typeof input === "string" && input.trim()) {
     messages = [{ role: "user", content: input.trim() }];
   }
@@ -108,7 +102,7 @@ function normalizeInputToMessages(input) {
   return messages;
 }
 
-// Reusable Responses Handler
+// Reusable handler — now returns Chat Completions format
 async function handleResponses(req, res) {
   try {
     let { model, input, previous_response_id, temperature, max_output_tokens } = req.body;
@@ -120,7 +114,6 @@ async function handleResponses(req, res) {
 
     const messages = normalizeInputToMessages(input);
 
-    // Enforce no empty payload
     if (!messages || messages.length === 0) {
       return res.status(400).json({
         error: {
@@ -139,20 +132,27 @@ async function handleResponses(req, res) {
 
     const contentText = extractContent(puterResponse.message?.content || puterResponse);
 
+    // ✅ CHAT COMPLETIONS FORMAT (as requested)
     res.json({
-      id: `resp_${Date.now().toString(36)}`,
-      object: "response",
+      id: `chatcmpl_${Date.now().toString(36)}`,
+      object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model: originalModel,
-      output: [
+      choices: [
         {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: contentText }],
-        },
+          index: 0,
+          message: {
+            role: "assistant",
+            content: contentText
+          },
+          finish_reason: "stop"
+        }
       ],
-      usage: puterResponse.usage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
-      ...(previous_response_id && { previous_response_id }),
+      usage: puterResponse.usage || {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0
+      }
     });
   } catch (err) {
     console.error("FULL ERROR in responses:", err);
@@ -181,5 +181,5 @@ app.post("/chat", async (req, res) => { /* your current code */ });
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ Strict transformer active — no fake content injected`);
+  console.log(`✅ /responses now returns Chat Completions format`);
 });
