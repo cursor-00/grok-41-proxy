@@ -41,21 +41,25 @@ const openaiModelList = {
   ]
 };
 
-// Bulletproof content extractor
-function extractContent(content) {
-  if (!content) return "";
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content.map(c => c?.text || c?.output_text || c?.content || "").join("");
+function normalizeInput(input) {
+  if (Array.isArray(input)) {
+    return input.map(msg => ({
+      role: msg.role || "user",
+      content: Array.isArray(msg.content)
+        ? msg.content.map(c => c.text || c.output_text || "").join("")
+        : msg.content
+    }));
   }
-  if (typeof content === "object") {
-    return content.text || content.output_text || content.content || "";
+
+  if (typeof input === "string") {
+    return [{ role: "user", content: input }];
   }
-  return String(content);
+
+  return [];
 }
 
 // ────────────────────────────────────────────────
-// Reusable Responses Handler
+// Reusable Responses Handler (Streaming + Non-streaming)
 // ────────────────────────────────────────────────
 async function handleResponses(req, res) {
   try {
@@ -63,28 +67,13 @@ async function handleResponses(req, res) {
 
     console.log("Stream requested:", !!stream);
 
-    if (stream) {
-      return res.status(501).json({
-        error: { message: "Streaming not supported yet", type: "not_supported" }
-      });
-    }
-
     if (!model) {
       return res.status(400).json({
         error: { message: "Model is required", type: "invalid_request_error" }
       });
     }
 
-    const messages = Array.isArray(input)
-      ? input.map(msg => ({
-          role: msg.role || "user",
-          content: Array.isArray(msg.content)
-            ? msg.content.map(c => c.text || c.output_text || "").join("")
-            : msg.content
-        }))
-      : typeof input === "string"
-      ? [{ role: "user", content: input }]
-      : [];
+    const messages = normalizeInput(input);
 
     if (!messages.length) {
       return res.status(400).json({
@@ -105,25 +94,36 @@ async function handleResponses(req, res) {
           messages,
           temperature: temperature ?? 0.7,
           max_tokens: max_output_tokens ?? 4096,
-          stream: false
+          stream: !!stream
         })
       }
     );
 
-    let data;
-    try {
-      data = await providerRes.json();
-    } catch {
-      return res.status(providerRes.status).json({
-        error: { message: "Invalid JSON from provider", type: "provider_error" }
+    // Forward raw provider error
+    if (!providerRes.ok) {
+      const errorText = await providerRes.text();
+      return res.status(providerRes.status).send(errorText);
+    }
+
+    // STREAMING MODE
+    if (stream) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      providerRes.body.pipe(res);
+      return;
+    }
+
+    // Non-stream mode
+    const data = await providerRes.json();
+
+    if (!data.choices?.length) {
+      return res.status(500).json({
+        error: { message: "Invalid provider response", type: "provider_error" }
       });
     }
 
-    if (!providerRes.ok) {
-      return res.status(providerRes.status).json(data);
-    }
-
-    const contentText = extractContent(data.choices?.[0]?.message?.content || data);
+    const contentText = data.choices[0].message.content;
 
     res.json({
       id: `resp_${Date.now().toString(36)}`,
@@ -152,11 +152,11 @@ async function handleResponses(req, res) {
   }
 }
 
-// Wire both routes to the same handler
+// Support both /responses and /v1/responses
 app.post("/responses", handleResponses);
 app.post("/v1/responses", handleResponses);
 
-// Model list
+// Model list routes
 app.get("/v1/models", (req, res) => res.json(openaiModelList));
 app.get("/models", (req, res) => res.json(openaiModelList));
 
@@ -164,5 +164,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Supports both /responses and /v1/responses`);
+  console.log(`✅ Supports /responses and /v1/responses with streaming`);
 });
