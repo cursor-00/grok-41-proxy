@@ -31,7 +31,7 @@ app.use(express.json({ limit: "50mb" }));
 
 // Health check
 app.get("/", (req, res) => {
-  res.json({ status: "OK", service: "Puter Proxy", version: "final-non-stream" });
+  res.json({ status: "OK", service: "Puter Proxy", version: "final" });
 });
 
 // Model list for Accomplish
@@ -62,7 +62,7 @@ function normalizeInput(input) {
   });
 }
 
-// Main handler - Non-streaming only
+// Main handler
 async function handleResponses(req, res) {
   try {
     const { model, input, temperature, max_output_tokens } = req.body;
@@ -88,7 +88,7 @@ async function handleResponses(req, res) {
           messages,
           temperature: temperature ?? 0.7,
           max_tokens: max_output_tokens ?? 4096,
-          stream: false   // ← Forced non-streaming
+          stream: false
         })
       }
     );
@@ -107,7 +107,10 @@ async function handleResponses(req, res) {
       id: `resp_${Date.now().toString(36)}`,
       object: "response",
       created: Math.floor(Date.now() / 1000),
-      model,
+
+      // Strip openai/ prefix as requested
+      model: (model || "").replace(/^openai\//, ""),
+
       output: [
         {
           id: `msg_${Date.now().toString(36)}`,
@@ -116,9 +119,16 @@ async function handleResponses(req, res) {
           content: [{ type: "output_text", text: contentText }]
         }
       ],
+
+      // 🔥 CRITICAL: output_text at root level (required by ai-sdk)
+      output_text: contentText,
+
       usage: {
-        input_tokens: data.usage?.prompt_tokens || 0,
-        output_tokens: data.usage?.completion_tokens || 0
+        input_tokens: data.usage?.prompt_tokens ?? 1,
+        output_tokens: data.usage?.completion_tokens ?? 1,
+        total_tokens:
+          (data.usage?.prompt_tokens ?? 1) +
+          (data.usage?.completion_tokens ?? 1)
       }
     });
 
@@ -142,5 +152,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Non-streaming mode + Claude Opus 4.6 + developer→system`);
+  console.log(`✅ output_text at root + minimum 1 token + developer→system`);
 });
