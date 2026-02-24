@@ -16,6 +16,7 @@ const PUTER_TOKEN = process.env.PUTER_AUTH_TOKEN;
 
 const app = express();
 
+// CORS
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -29,6 +30,17 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "50mb" }));
 
+// HEALTH CHECK (required by Render and Accomplish)
+app.get("/", (req, res) => {
+  res.json({
+    status: "OK",
+    service: "Puter Proxy",
+    version: "final",
+    message: "Ready for Accomplish"
+  });
+});
+
+// Model list
 const openaiModelList = {
   object: "list",
   data: [
@@ -45,7 +57,7 @@ function normalizeInput(input) {
 
   return input.map(msg => {
     let role = msg.role || "user";
-    if (role === "developer") role = "system";   // Critical fix
+    if (role === "developer") role = "system";
 
     return {
       role,
@@ -56,9 +68,7 @@ function normalizeInput(input) {
   });
 }
 
-// ────────────────────────────────────────────────
 // Main handler
-// ────────────────────────────────────────────────
 async function handleResponses(req, res) {
   try {
     const { model, input, temperature, max_output_tokens, stream } = req.body;
@@ -73,7 +83,7 @@ async function handleResponses(req, res) {
       });
     }
 
-    // Only add temperature for models that support it
+    // Conditional temperature (nano doesn't support custom temp)
     const bodyPayload = {
       model,
       messages,
@@ -108,7 +118,7 @@ async function handleResponses(req, res) {
       return res.status(providerRes.status).send(errorText);
     }
 
-    // STREAMING — Correct way for Node.js + fetch
+    // STREAMING — Correct Web Stream handling
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -126,7 +136,7 @@ async function handleResponses(req, res) {
       return;
     }
 
-    // Non-stream mode
+    // Non-stream
     const data = await providerRes.json();
 
     const contentText = data.choices?.[0]?.message?.content || "";
@@ -170,5 +180,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Streaming fixed with getReader() + temperature conditional + developer→system`);
+  console.log(`✅ Health check + streaming + developer→system + conditional temperature`);
 });
