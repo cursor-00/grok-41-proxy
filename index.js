@@ -56,12 +56,12 @@ function normalizeInput(input) {
   });
 }
 
-// Main handler - Force Claude Opus 4.6 (stable model)
+// Main handler — Force non-streaming for stability
 async function handleResponses(req, res) {
   try {
-    const { model, input, max_output_tokens, stream } = req.body;
+    const { model, input, temperature, max_output_tokens } = req.body;
 
-    console.log("Stream requested:", !!stream);
+    console.log("Stream requested: true → Forced false for stability");
 
     const messages = normalizeInput(input);
 
@@ -71,19 +71,6 @@ async function handleResponses(req, res) {
       });
     }
 
-    const bodyPayload = {
-      model: "anthropic/claude-opus-4-6",   // ← Forced stable model
-      messages,
-      stream: !!stream
-    };
-
-    // Do NOT send temperature (Puter nano rejects it, Opus accepts default)
-    if (max_output_tokens !== undefined) {
-      bodyPayload.max_tokens = max_output_tokens;
-    }
-
-    console.log("Forward body to Puter:", JSON.stringify(bodyPayload));
-
     const providerRes = await fetch(
       "https://api.puter.com/puterai/openai/v1/chat/completions",
       {
@@ -92,7 +79,13 @@ async function handleResponses(req, res) {
           Authorization: `Bearer ${PUTER_TOKEN}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify(bodyPayload)
+        body: JSON.stringify({
+          model: "anthropic/claude-opus-4-6",
+          messages,
+          temperature: temperature ?? 0.7,
+          max_tokens: max_output_tokens ?? 4096,
+          stream: false   // ← Forced non-streaming
+        })
       }
     );
 
@@ -102,25 +95,6 @@ async function handleResponses(req, res) {
       return res.status(providerRes.status).send(errorText);
     }
 
-    // STREAMING
-    if (stream) {
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
-      const reader = providerRes.body.getReader();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        res.write(value);
-      }
-
-      res.end();
-      return;
-    }
-
-    // Non-stream
     const data = await providerRes.json();
 
     const contentText = data.choices?.[0]?.message?.content || "";
@@ -164,5 +138,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Forced Claude Opus 4.6 + streaming + developer→system fix`);
+  console.log(`✅ Non-streaming mode + Claude Opus 4.6 + developer→system fix`);
 });
