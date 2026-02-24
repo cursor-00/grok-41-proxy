@@ -16,7 +16,6 @@ const PUTER_TOKEN = process.env.PUTER_AUTH_TOKEN;
 
 const app = express();
 
-// CORS
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -30,17 +29,6 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "50mb" }));
 
-// HEALTH CHECK (required by Render and Accomplish)
-app.get("/", (req, res) => {
-  res.json({
-    status: "OK",
-    service: "Puter Proxy",
-    version: "final",
-    message: "Ready for Accomplish"
-  });
-});
-
-// Model list
 const openaiModelList = {
   object: "list",
   data: [
@@ -75,6 +63,9 @@ async function handleResponses(req, res) {
 
     console.log("Stream requested:", !!stream);
 
+    // Force reliable model for all requests
+    const finalModel = "anthropic/claude-opus-4-6";
+
     const messages = normalizeInput(input);
 
     if (!messages.length) {
@@ -83,14 +74,14 @@ async function handleResponses(req, res) {
       });
     }
 
-    // Conditional temperature (nano doesn't support custom temp)
     const bodyPayload = {
-      model,
+      model: finalModel,
       messages,
       stream: !!stream
     };
 
-    if (temperature !== undefined && !model.toLowerCase().includes("nano")) {
+    // Only add temperature if not nano (but we are forcing Opus anyway)
+    if (temperature !== undefined) {
       bodyPayload.temperature = temperature;
     }
 
@@ -98,7 +89,7 @@ async function handleResponses(req, res) {
       bodyPayload.max_tokens = max_output_tokens;
     }
 
-    console.log("Forward body to Puter:", JSON.stringify(bodyPayload));
+    console.log("Forwarding to Puter with model:", finalModel);
 
     const providerRes = await fetch(
       "https://api.puter.com/puterai/openai/v1/chat/completions",
@@ -118,7 +109,7 @@ async function handleResponses(req, res) {
       return res.status(providerRes.status).send(errorText);
     }
 
-    // STREAMING — Correct Web Stream handling
+    // STREAMING
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -180,5 +171,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Health check + streaming + developer→system + conditional temperature`);
+  console.log(`✅ All requests forced to Claude Opus 4.6 + streaming fixed`);
 });
