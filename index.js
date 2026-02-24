@@ -1,168 +1,74 @@
-import { config } from "dotenv";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
-import express from "express";
+The Real Fix (Streaming Pass-Through Correctly)
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+Replace your streaming block with this:
 
-config({ path: join(__dirname, ".env") });
-
-if (!process.env.PUTER_AUTH_TOKEN) {
-  throw new Error("PUTER_AUTH_TOKEN is not set in .env");
-}
-
-const PUTER_TOKEN = process.env.PUTER_AUTH_TOKEN;
-
-const app = express();
-
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
-  if (req.method === "OPTIONS") return res.sendStatus(200);
-
-  console.log("Incoming:", req.method, req.originalUrl);
-  next();
-});
-
-app.use(express.json({ limit: "50mb" }));
-
-// Model list for Accomplish
-const openaiModelList = {
-  object: "list",
-  data: [
-    { id: "gpt-5.2", object: "model", owned_by: "openai" },
-    { id: "gpt-5.2-codex", object: "model", owned_by: "openai" },
-    { id: "gpt-5.1-codex-max", object: "model", owned_by: "openai" },
-    { id: "gpt-5.1-codex-mini", object: "model", owned_by: "openai" },
-    { id: "gpt-5-nano", object: "model", owned_by: "openai" }
-  ]
-};
-
-function normalizeInput(input) {
-  if (Array.isArray(input)) {
-    return input.map(msg => ({
-      role: msg.role || "user",
-      content: Array.isArray(msg.content)
-        ? msg.content.map(c => c.text || c.output_text || "").join("")
-        : msg.content
-    }));
+if (stream) {
+  if (!providerRes.ok) {
+    const errorText = await providerRes.text();
+    return res.status(providerRes.status).send(errorText);
   }
 
-  if (typeof input === "string") {
-    return [{ role: "user", content: input }];
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const reader = providerRes.body.getReader();
+  const encoder = new TextEncoder();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    res.write(value);
   }
 
-  return [];
+  res.end();
+  return;
 }
 
-// ────────────────────────────────────────────────
-// Reusable Responses Handler
-// ────────────────────────────────────────────────
-async function handleResponses(req, res) {
-  try {
-    const { model, input, temperature, max_output_tokens, stream } = req.body;
+This properly handles Web Streams.
 
-    console.log("Stream requested:", !!stream);
+🧠 Why This Matters
 
-    // === MODEL HANDLING — EXACTLY AS REQUESTED ===
-    let finalModel = model || "gpt-5-nano";
-    // Strip any provider prefix (openai/, anthropic/, etc.)
-    finalModel = finalModel.replace(/^(openai|anthropic|x-ai|google|qwen|deepseek|mistral|claude|grok)\//i, "");
+AI SDK expects:
 
-    console.log(`[Model] Received: ${model} → Forwarding: ${finalModel}`);
+Content-Type: text/event-stream
+data: {...}
+data: {...}
 
-    const messages = normalizeInput(input);
+If your proxy:
 
-    if (!messages.length) {
-      return res.status(400).json({
-        error: { message: "No valid input", type: "invalid_request_error" }
-      });
-    }
+closes connection too early
 
-    const providerRes = await fetch(
-      "https://api.puter.com/puterai/openai/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${PUTER_TOKEN}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: finalModel,           // ← Forward exactly (after strip)
-          messages,
-          temperature: temperature ?? 0.7,
-          max_tokens: max_output_tokens ?? 4096,
-          stream: !!stream
-        })
-      }
-    );
+sends wrong headers
 
-    if (!providerRes.ok) {
-      const errorText = await providerRes.text();
-      return res.status(providerRes.status).send(errorText);
-    }
+buffers instead of streaming
 
-    // STREAMING MODE
-    if (stream) {
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      providerRes.body.pipe(res);
-      return;
-    }
+pipes incorrectly
 
-    // Non-stream mode
-    const data = await providerRes.json();
+AI SDK throws generic:
 
-    if (!data.choices?.length) {
-      return res.status(500).json({
-        error: { message: "Invalid provider response", type: "provider_error" }
-      });
-    }
+API error (400)
 
-    const contentText = data.choices[0].message.content;
+Even though provider may be fine.
 
-    res.json({
-      id: `resp_${Date.now().toString(36)}`,
-      object: "response",
-      created: Math.floor(Date.now() / 1000),
-      model,                                 // return original model to client
-      output: [
-        {
-          id: `msg_${Date.now().toString(36)}`,
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: contentText }]
-        }
-      ],
-      usage: {
-        input_tokens: data.usage?.prompt_tokens || 0,
-        output_tokens: data.usage?.completion_tokens || 0
-      }
-    });
+🔎 One More Critical Check
 
-  } catch (err) {
-    console.error("FULL ERROR in /responses:", err);
-    res.status(500).json({
-      error: { message: err.message || "Internal error", type: "internal_error" }
-    });
-  }
-}
+Add this log before forwarding:
 
-// Support both routes
-app.post("/responses", handleResponses);
-app.post("/v1/responses", handleResponses);
+console.log("Forward body:", JSON.stringify({
+  model,
+  messages,
+  stream
+}));
 
-// Model list
-app.get("/v1/models", (req, res) => res.json(openaiModelList));
-app.get("/models", (req, res) => res.json(openaiModelList));
+We need to confirm messages shape is:
 
-const PORT = process.env.PORT || 3333;
+[
+  { "role": "user", "content": "hello" }
+]
 
-app.listen(PORT, () => {
-  console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Model forwarded exactly as received (prefix stripped)`);
-});
+NOT:
+
+[{ "role": "user", "content": [{ "type":"text","text":"hello"}] }]
+
+Because Puter expects classic OpenAI Chat format.
