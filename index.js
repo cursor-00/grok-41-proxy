@@ -41,35 +41,6 @@ const openaiModelList = {
   ]
 };
 
-// ────────────────────────────────────────────────
-// New Model Normalization (as you requested)
-// ────────────────────────────────────────────────
-function normalizeModel(model) {
-  if (!model || typeof model !== "string") {
-    return "openai/gpt-5-nano";
-  }
-
-  const m = model.toLowerCase();
-
-  if (m.includes("5.1") && m.includes("codex") && m.includes("max")) {
-    return "openai/gpt-5.1-codex-max";
-  }
-
-  if (m.includes("5.1") && m.includes("codex") && m.includes("mini")) {
-    return "openai/gpt-5.1-codex-mini";
-  }
-
-  if (m.includes("5.2")) {
-    return "openai/gpt-5.2";
-  }
-
-  if (m.includes("nano")) {
-    return "openai/gpt-5-nano";
-  }
-
-  return "openai/gpt-5-nano";
-}
-
 function normalizeInput(input) {
   if (Array.isArray(input)) {
     return input.map(msg => ({
@@ -96,14 +67,12 @@ async function handleResponses(req, res) {
 
     console.log("Stream requested:", !!stream);
 
-    if (!model) {
-      return res.status(400).json({
-        error: { message: "Model is required", type: "invalid_request_error" }
-      });
-    }
+    // === MODEL HANDLING — EXACTLY AS REQUESTED ===
+    let finalModel = model || "gpt-5-nano";
+    // Strip any provider prefix (openai/, anthropic/, etc.)
+    finalModel = finalModel.replace(/^(openai|anthropic|x-ai|google|qwen|deepseek|mistral|claude|grok)\//i, "");
 
-    const requestedModel = normalizeModel(model);   // ← Your new normalization
-    console.log(`[Model] ${model} → ${requestedModel}`);
+    console.log(`[Model] Received: ${model} → Forwarding: ${finalModel}`);
 
     const messages = normalizeInput(input);
 
@@ -122,7 +91,7 @@ async function handleResponses(req, res) {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: requestedModel,        // ← Use normalized model
+          model: finalModel,           // ← Forward exactly (after strip)
           messages,
           temperature: temperature ?? 0.7,
           max_tokens: max_output_tokens ?? 4096,
@@ -136,7 +105,7 @@ async function handleResponses(req, res) {
       return res.status(providerRes.status).send(errorText);
     }
 
-    // STREAMING
+    // STREAMING MODE
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -145,7 +114,7 @@ async function handleResponses(req, res) {
       return;
     }
 
-    // Non-stream
+    // Non-stream mode
     const data = await providerRes.json();
 
     if (!data.choices?.length) {
@@ -160,7 +129,7 @@ async function handleResponses(req, res) {
       id: `resp_${Date.now().toString(36)}`,
       object: "response",
       created: Math.floor(Date.now() / 1000),
-      model,                                 // return original model name to Accomplish
+      model,                                 // return original model to client
       output: [
         {
           id: `msg_${Date.now().toString(36)}`,
@@ -195,4 +164,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
+  console.log(`✅ Model forwarded exactly as received (prefix stripped)`);
 });
