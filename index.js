@@ -29,7 +29,6 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "50mb" }));
 
-// Model list for Accomplish
 const openaiModelList = {
   object: "list",
   data: [
@@ -46,7 +45,7 @@ function normalizeInput(input) {
 
   return input.map(msg => {
     let role = msg.role || "user";
-    if (role === "developer") role = "system";   // Critical fix
+    if (role === "developer") role = "system";
 
     return {
       role,
@@ -58,7 +57,7 @@ function normalizeInput(input) {
 }
 
 // ────────────────────────────────────────────────
-// Reusable handler (streaming + non-streaming)
+// Main handler
 // ────────────────────────────────────────────────
 async function handleResponses(req, res) {
   try {
@@ -74,7 +73,24 @@ async function handleResponses(req, res) {
       });
     }
 
-    console.log("Forwarding to Puter - model:", model);
+    // Build body for Puter
+    const body = {
+      model,
+      messages,
+      stream: !!stream
+    };
+
+    // Only add temperature if it's not the problematic nano model
+    if (temperature !== undefined && !model.toLowerCase().includes("nano")) {
+      body.temperature = temperature;
+    }
+
+    // Only add max_tokens if provided
+    if (max_output_tokens !== undefined) {
+      body.max_tokens = max_output_tokens;
+    }
+
+    console.log("Forward body to Puter:", JSON.stringify(body));
 
     const providerRes = await fetch(
       "https://api.puter.com/puterai/openai/v1/chat/completions",
@@ -84,13 +100,7 @@ async function handleResponses(req, res) {
           Authorization: `Bearer ${PUTER_TOKEN}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature: temperature ?? 0.7,
-          max_tokens: max_output_tokens ?? 4096,
-          stream: !!stream
-        })
+        body: JSON.stringify(body)
       }
     );
 
@@ -100,18 +110,16 @@ async function handleResponses(req, res) {
       return res.status(providerRes.status).send(errorText);
     }
 
-    // STREAMING MODE - Simple & Reliable pipe
+    // Streaming
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
-      res.setHeader("Transfer-Encoding", "chunked");
-
       providerRes.body.pipe(res);
       return;
     }
 
-    // Non-stream mode
+    // Non-stream
     const data = await providerRes.json();
 
     const contentText = data.choices?.[0]?.message?.content || "";
@@ -155,5 +163,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Streaming passthrough + "developer" → "system" fix active`);
+  console.log(`✅ Temperature conditionally omitted for nano + developer→system fix`);
 });
