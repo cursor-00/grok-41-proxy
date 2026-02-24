@@ -29,12 +29,12 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "50mb" }));
 
-// Health check for Render
+// Health check
 app.get("/", (req, res) => {
-  res.json({ status: "OK", service: "Puter Proxy", version: "final-single-token" });
+  res.json({ status: "OK", service: "Puter Proxy", version: "final-streaming" });
 });
 
-// Model list for Accomplish
+// Model list
 const openaiModelList = {
   object: "list",
   data: [
@@ -52,6 +52,7 @@ function normalizeInput(input) {
   return input.map(msg => {
     let role = msg.role || "user";
     if (role === "developer") role = "system";
+
     return {
       role,
       content: Array.isArray(msg.content)
@@ -61,7 +62,7 @@ function normalizeInput(input) {
   });
 }
 
-// Main handler - Single token + Claude Opus 4.6
+// Main handler with proper SSE streaming
 async function handleResponses(req, res) {
   try {
     const { model, input, temperature, max_output_tokens, stream } = req.body;
@@ -89,28 +90,36 @@ async function handleResponses(req, res) {
           messages,
           temperature: temperature ?? 0.7,
           max_tokens: max_output_tokens ?? 4096,
-          stream: false
+          stream: !!stream
         })
       }
     );
 
     if (!providerRes.ok) {
       const errorText = await providerRes.text();
-      console.error("Puter error:", errorText);
-
-      // Nice message for insufficient funds
-      if (errorText.includes("insufficient_funds") || errorText.includes("No usage left")) {
-        return res.status(402).json({
-          error: {
-            message: "No usage left on this token. Create a new Puter account for fresh quota.",
-            type: "insufficient_funds"
-          }
-        });
-      }
-
+      console.error("Provider error:", errorText);
       return res.status(providerRes.status).send(errorText);
     }
 
+    // PROPER STREAMING PASSTHROUGH
+    if (stream) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const reader = providerRes.body.getReader();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+
+      res.end();
+      return;
+    }
+
+    // Non-stream mode
     const data = await providerRes.json();
 
     const contentText = data.choices?.[0]?.message?.content || "I am ready to help.";
@@ -154,5 +163,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Single token mode + Claude Opus 4.6 + developer→system`);
+  console.log(`✅ Proper SSE streaming passthrough active`);
 });
