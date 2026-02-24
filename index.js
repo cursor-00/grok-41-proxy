@@ -17,20 +17,28 @@ console.log("Puter initialized, auth token present:", !!process.env.PUTER_AUTH_T
 
 const app = express();
 
-// CORS + Debug Logging
+// ────────────────────────────────────────────────
+// 1️⃣ Correct middleware order (JSON parser BEFORE logging)
+// ────────────────────────────────────────────────
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+// Debug logging (now sees real req.body)
+app.use((req, res, next) => {
+  console.log("Incoming:", req.method, req.originalUrl);
+  console.log("Incoming body:", JSON.stringify(req.body));
+  next();
+});
+
+// CORS
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   if (req.method === "OPTIONS") return res.sendStatus(200);
-
-  console.log("Incoming:", req.method, req.originalUrl);
   next();
 });
-
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // Shared OpenAI model list
 const openaiModelList = {
@@ -44,7 +52,7 @@ const openaiModelList = {
   ]
 };
 
-// TEMPORARY FORCE — all requests go to a known working model
+// TEMPORARY FORCE to working model
 function routeModel(model) {
   console.log(`[Router] Requested: ${model} → FORCED to anthropic/claude-opus-4-6`);
   return "anthropic/claude-opus-4-6";
@@ -60,11 +68,11 @@ function extractContent(content) {
 }
 
 // ────────────────────────────────────────────────
-// /responses — Proper Responses API format
+// Shared handler for /responses and /v1/responses
 // ────────────────────────────────────────────────
-app.post("/responses", async (req, res) => {
+async function handleResponses(req, res) {
   try {
-    const { model, input, temperature, max_output_tokens } = req.body;
+    const { model, input, temperature, max_output_tokens, stream } = req.body;
 
     const routedModel = routeModel(model);
 
@@ -87,19 +95,40 @@ app.post("/responses", async (req, res) => {
 
     const puterResponse = await puter.ai.chat(messages, {
       model: routedModel,
-      stream: false,
+      stream: !!stream,
       ...(temperature !== undefined && { temperature }),
       ...(max_output_tokens !== undefined && { max_tokens: max_output_tokens })
     });
 
-    // ← RAW DEBUG (this will show us the real Puter response)
     console.log("Puter raw response:", JSON.stringify(puterResponse));
 
     const contentText = extractContent(puterResponse.message?.content || puterResponse);
 
+    // 2️⃣ Streaming support (SSE for Responses API)
+    if (stream) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      // Send delta
+      res.write(`data: ${JSON.stringify({
+        type: "response.output_text.delta",
+        delta: { text: contentText }
+      })}\n\n`);
+
+      // Send completed
+      res.write(`data: ${JSON.stringify({
+        type: "response.completed"
+      })}\n\n`);
+
+      return res.end();
+    }
+
+    // 3️⃣ Non-streaming Responses API format with status
     res.json({
       id: `resp_${Date.now().toString(36)}`,
       object: "response",
+      status: "completed",           // ← Added for AI SDK compatibility
       created: Math.floor(Date.now() / 1000),
       model,
       output: [
@@ -122,7 +151,11 @@ app.post("/responses", async (req, res) => {
       error: { message: err?.message || "Internal error", type: "internal_error" }
     });
   }
-});
+}
+
+// 1️⃣ Both routes (removes baseURL ambiguity)
+app.post("/responses", handleResponses);
+app.post("/v1/responses", handleResponses);
 
 // Model list routes
 app.get("/v1/models", (req, res) => res.json(openaiModelList));
@@ -137,5 +170,6 @@ app.post("/chat", async (req, res) => { /* your existing code */ });
 const PORT = process.env.PORT || 3333;
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ ALL models forced to Claude Opus 4.6 for testing`);
+  console.log(`✅ /responses + /v1/responses both supported`);
+  console.log(`✅ Streaming + status: "completed" + correct middleware order`);
 });
