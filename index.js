@@ -41,6 +41,35 @@ const openaiModelList = {
   ]
 };
 
+// ────────────────────────────────────────────────
+// New Model Normalization (as you requested)
+// ────────────────────────────────────────────────
+function normalizeModel(model) {
+  if (!model || typeof model !== "string") {
+    return "openai/gpt-5-nano";
+  }
+
+  const m = model.toLowerCase();
+
+  if (m.includes("5.1") && m.includes("codex") && m.includes("max")) {
+    return "openai/gpt-5.1-codex-max";
+  }
+
+  if (m.includes("5.1") && m.includes("codex") && m.includes("mini")) {
+    return "openai/gpt-5.1-codex-mini";
+  }
+
+  if (m.includes("5.2")) {
+    return "openai/gpt-5.2";
+  }
+
+  if (m.includes("nano")) {
+    return "openai/gpt-5-nano";
+  }
+
+  return "openai/gpt-5-nano";
+}
+
 function normalizeInput(input) {
   if (Array.isArray(input)) {
     return input.map(msg => ({
@@ -59,7 +88,7 @@ function normalizeInput(input) {
 }
 
 // ────────────────────────────────────────────────
-// Reusable Responses Handler (Streaming + Non-streaming)
+// Reusable Responses Handler
 // ────────────────────────────────────────────────
 async function handleResponses(req, res) {
   try {
@@ -72,6 +101,9 @@ async function handleResponses(req, res) {
         error: { message: "Model is required", type: "invalid_request_error" }
       });
     }
+
+    const requestedModel = normalizeModel(model);   // ← Your new normalization
+    console.log(`[Model] ${model} → ${requestedModel}`);
 
     const messages = normalizeInput(input);
 
@@ -90,7 +122,7 @@ async function handleResponses(req, res) {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model,
+          model: requestedModel,        // ← Use normalized model
           messages,
           temperature: temperature ?? 0.7,
           max_tokens: max_output_tokens ?? 4096,
@@ -99,13 +131,12 @@ async function handleResponses(req, res) {
       }
     );
 
-    // Forward raw provider error
     if (!providerRes.ok) {
       const errorText = await providerRes.text();
       return res.status(providerRes.status).send(errorText);
     }
 
-    // STREAMING MODE
+    // STREAMING
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -114,7 +145,7 @@ async function handleResponses(req, res) {
       return;
     }
 
-    // Non-stream mode
+    // Non-stream
     const data = await providerRes.json();
 
     if (!data.choices?.length) {
@@ -129,7 +160,7 @@ async function handleResponses(req, res) {
       id: `resp_${Date.now().toString(36)}`,
       object: "response",
       created: Math.floor(Date.now() / 1000),
-      model,
+      model,                                 // return original model name to Accomplish
       output: [
         {
           id: `msg_${Date.now().toString(36)}`,
@@ -152,11 +183,11 @@ async function handleResponses(req, res) {
   }
 }
 
-// Support both /responses and /v1/responses
+// Support both routes
 app.post("/responses", handleResponses);
 app.post("/v1/responses", handleResponses);
 
-// Model list routes
+// Model list
 app.get("/v1/models", (req, res) => res.json(openaiModelList));
 app.get("/models", (req, res) => res.json(openaiModelList));
 
@@ -164,5 +195,4 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Supports /responses and /v1/responses with streaming`);
 });
