@@ -31,10 +31,10 @@ app.use(express.json({ limit: "50mb" }));
 
 // Health check
 app.get("/", (req, res) => {
-  res.json({ status: "OK", service: "Puter Proxy", version: "final-streaming" });
+  res.json({ status: "OK", service: "Puter Proxy", version: "final-non-stream" });
 });
 
-// Model list
+// Model list for Accomplish
 const openaiModelList = {
   object: "list",
   data: [
@@ -62,12 +62,10 @@ function normalizeInput(input) {
   });
 }
 
-// Main handler with proper SSE streaming
+// Main handler - Non-streaming only
 async function handleResponses(req, res) {
   try {
-    const { model, input, temperature, max_output_tokens, stream } = req.body;
-
-    console.log("Stream requested:", !!stream);
+    const { model, input, temperature, max_output_tokens } = req.body;
 
     const messages = normalizeInput(input);
 
@@ -90,36 +88,17 @@ async function handleResponses(req, res) {
           messages,
           temperature: temperature ?? 0.7,
           max_tokens: max_output_tokens ?? 4096,
-          stream: !!stream
+          stream: false   // ← Forced non-streaming
         })
       }
     );
 
     if (!providerRes.ok) {
       const errorText = await providerRes.text();
-      console.error("Provider error:", errorText);
+      console.error("Puter error:", errorText);
       return res.status(providerRes.status).send(errorText);
     }
 
-    // PROPER STREAMING PASSTHROUGH
-    if (stream) {
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
-      const reader = providerRes.body.getReader();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        res.write(value);
-      }
-
-      res.end();
-      return;
-    }
-
-    // Non-stream mode
     const data = await providerRes.json();
 
     const contentText = data.choices?.[0]?.message?.content || "I am ready to help.";
@@ -163,5 +142,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Proper SSE streaming passthrough active`);
+  console.log(`✅ Non-streaming mode + Claude Opus 4.6 + developer→system`);
 });
