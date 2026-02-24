@@ -29,14 +29,9 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "50mb" }));
 
-// Health check for Render and Accomplish
+// Health check for Render
 app.get("/", (req, res) => {
-  res.json({
-    status: "OK",
-    service: "Puter Proxy",
-    version: "final-single-token",
-    message: "Ready for Accomplish"
-  });
+  res.json({ status: "OK", service: "Puter Proxy", version: "final-single-token" });
 });
 
 // Model list for Accomplish
@@ -56,8 +51,7 @@ function normalizeInput(input) {
 
   return input.map(msg => {
     let role = msg.role || "user";
-    if (role === "developer") role = "system";   // Critical fix
-
+    if (role === "developer") role = "system";
     return {
       role,
       content: Array.isArray(msg.content)
@@ -67,12 +61,12 @@ function normalizeInput(input) {
   });
 }
 
-// Main handler - Force Claude Opus 4.6 + non-streaming
+// Main handler - Single token + Claude Opus 4.6
 async function handleResponses(req, res) {
   try {
     const { model, input, temperature, max_output_tokens, stream } = req.body;
 
-    console.log("Stream requested:", !!stream, "→ Forced false for stability");
+    console.log("Stream requested:", !!stream);
 
     const messages = normalizeInput(input);
 
@@ -91,7 +85,7 @@ async function handleResponses(req, res) {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: "anthropic/claude-opus-4-6",   // Forced stable model
+          model: "anthropic/claude-opus-4-6",
           messages,
           temperature: temperature ?? 0.7,
           max_tokens: max_output_tokens ?? 4096,
@@ -102,7 +96,18 @@ async function handleResponses(req, res) {
 
     if (!providerRes.ok) {
       const errorText = await providerRes.text();
-      console.error("Provider error:", errorText);
+      console.error("Puter error:", errorText);
+
+      // Nice message for insufficient funds
+      if (errorText.includes("insufficient_funds") || errorText.includes("No usage left")) {
+        return res.status(402).json({
+          error: {
+            message: "No usage left on this token. Create a new Puter account for fresh quota.",
+            type: "insufficient_funds"
+          }
+        });
+      }
+
       return res.status(providerRes.status).send(errorText);
     }
 
@@ -149,5 +154,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Single token + forced Claude Opus 4.6 + non-streaming + developer→system`);
+  console.log(`✅ Single token mode + Claude Opus 4.6 + developer→system`);
 });
