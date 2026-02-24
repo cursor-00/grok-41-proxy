@@ -73,24 +73,22 @@ async function handleResponses(req, res) {
       });
     }
 
-    // Build body for Puter
-    const body = {
+    // Only add temperature for models that support it
+    const bodyPayload = {
       model,
       messages,
       stream: !!stream
     };
 
-    // Only add temperature if it's not the problematic nano model
     if (temperature !== undefined && !model.toLowerCase().includes("nano")) {
-      body.temperature = temperature;
+      bodyPayload.temperature = temperature;
     }
 
-    // Only add max_tokens if provided
     if (max_output_tokens !== undefined) {
-      body.max_tokens = max_output_tokens;
+      bodyPayload.max_tokens = max_output_tokens;
     }
 
-    console.log("Forward body to Puter:", JSON.stringify(body));
+    console.log("Forward body to Puter:", JSON.stringify(bodyPayload));
 
     const providerRes = await fetch(
       "https://api.puter.com/puterai/openai/v1/chat/completions",
@@ -100,7 +98,7 @@ async function handleResponses(req, res) {
           Authorization: `Bearer ${PUTER_TOKEN}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(bodyPayload)
       }
     );
 
@@ -110,16 +108,25 @@ async function handleResponses(req, res) {
       return res.status(providerRes.status).send(errorText);
     }
 
-    // Streaming
+    // STREAMING — Correct Web Stream handling (works on Render)
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
-      providerRes.body.pipe(res);
+
+      const reader = providerRes.body.getReader();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+
+      res.end();
       return;
     }
 
-    // Non-stream
+    // Non-stream mode
     const data = await providerRes.json();
 
     const contentText = data.choices?.[0]?.message?.content || "";
@@ -163,5 +170,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Temperature conditionally omitted for nano + developer→system fix`);
+  console.log(`✅ Streaming fixed with getReader() + developer→system + conditional temperature`);
 });
