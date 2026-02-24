@@ -2,45 +2,34 @@ import { config } from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import express from "express";
-import puter from "@heyputer/puter.js";
-import { pickModel } from "./router.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Load environment variables
 config({ path: join(__dirname, ".env") });
 
-// Initialize Puter.js
-puter.setAuthToken(process.env.PUTER_AUTH_TOKEN);
-console.log("Puter initialized, auth token present:", !!process.env.PUTER_AUTH_TOKEN);
+if (!process.env.PUTER_AUTH_TOKEN) {
+  throw new Error("PUTER_AUTH_TOKEN is not set in .env");
+}
+
+const PUTER_TOKEN = process.env.PUTER_AUTH_TOKEN;
 
 const app = express();
 
-// ────────────────────────────────────────────────
-// 1️⃣ Correct middleware order (JSON parser BEFORE logging)
-// ────────────────────────────────────────────────
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true, limit: "50mb" }));
-
-// Debug logging (now sees real req.body)
-app.use((req, res, next) => {
-  console.log("Incoming:", req.method, req.originalUrl);
-  console.log("Incoming body:", JSON.stringify(req.body));
-  next();
-});
-
-// CORS
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   if (req.method === "OPTIONS") return res.sendStatus(200);
+
+  console.log("Incoming:", req.method, req.originalUrl);
   next();
 });
 
-// Shared OpenAI model list
+app.use(express.json({ limit: "50mb" }));
+
+// Model list for Accomplish
 const openaiModelList = {
   object: "list",
   data: [
@@ -52,29 +41,39 @@ const openaiModelList = {
   ]
 };
 
-// TEMPORARY FORCE to working model
-function routeModel(model) {
-  console.log(`[Router] Requested: ${model} → FORCED to anthropic/claude-opus-4-6`);
-  return "anthropic/claude-opus-4-6";
-}
-
-// Bulletproof extractor
+// Bulletproof content extractor
 function extractContent(content) {
   if (!content) return "";
   if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map(c => c?.text || c?.output_text || c?.content || "").join("");
-  if (typeof content === "object") return content.text || content.output_text || content.content || "";
+  if (Array.isArray(content)) {
+    return content.map(c => c?.text || c?.output_text || c?.content || "").join("");
+  }
+  if (typeof content === "object") {
+    return content.text || content.output_text || content.content || "";
+  }
   return String(content);
 }
 
 // ────────────────────────────────────────────────
-// Shared handler for /responses and /v1/responses
+// Reusable Responses Handler
 // ────────────────────────────────────────────────
 async function handleResponses(req, res) {
   try {
     const { model, input, temperature, max_output_tokens, stream } = req.body;
 
-    const routedModel = routeModel(model);
+    console.log("Stream requested:", !!stream);
+
+    if (stream) {
+      return res.status(501).json({
+        error: { message: "Streaming not supported yet", type: "not_supported" }
+      });
+    }
+
+    if (!model) {
+      return res.status(400).json({
+        error: { message: "Model is required", type: "invalid_request_error" }
+      });
+    }
 
     const messages = Array.isArray(input)
       ? input.map(msg => ({
@@ -93,42 +92,42 @@ async function handleResponses(req, res) {
       });
     }
 
-    const puterResponse = await puter.ai.chat(messages, {
-      model: routedModel,
-      stream: !!stream,
-      ...(temperature !== undefined && { temperature }),
-      ...(max_output_tokens !== undefined && { max_tokens: max_output_tokens })
-    });
+    const providerRes = await fetch(
+      "https://api.puter.com/puterai/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${PUTER_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: temperature ?? 0.7,
+          max_tokens: max_output_tokens ?? 4096,
+          stream: false
+        })
+      }
+    );
 
-    console.log("Puter raw response:", JSON.stringify(puterResponse));
-
-    const contentText = extractContent(puterResponse.message?.content || puterResponse);
-
-    // 2️⃣ Streaming support (SSE for Responses API)
-    if (stream) {
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
-      // Send delta
-      res.write(`data: ${JSON.stringify({
-        type: "response.output_text.delta",
-        delta: { text: contentText }
-      })}\n\n`);
-
-      // Send completed
-      res.write(`data: ${JSON.stringify({
-        type: "response.completed"
-      })}\n\n`);
-
-      return res.end();
+    let data;
+    try {
+      data = await providerRes.json();
+    } catch {
+      return res.status(providerRes.status).json({
+        error: { message: "Invalid JSON from provider", type: "provider_error" }
+      });
     }
 
-    // 3️⃣ Non-streaming Responses API format with status
+    if (!providerRes.ok) {
+      return res.status(providerRes.status).json(data);
+    }
+
+    const contentText = extractContent(data.choices?.[0]?.message?.content || data);
+
     res.json({
       id: `resp_${Date.now().toString(36)}`,
       object: "response",
-      status: "completed",           // ← Added for AI SDK compatibility
       created: Math.floor(Date.now() / 1000),
       model,
       output: [
@@ -140,36 +139,30 @@ async function handleResponses(req, res) {
         }
       ],
       usage: {
-        input_tokens: puterResponse?.usage?.input_tokens || 0,
-        output_tokens: puterResponse?.usage?.output_tokens || 0
+        input_tokens: data.usage?.prompt_tokens || 0,
+        output_tokens: data.usage?.completion_tokens || 0
       }
     });
 
   } catch (err) {
     console.error("FULL ERROR in /responses:", err);
     res.status(500).json({
-      error: { message: err?.message || "Internal error", type: "internal_error" }
+      error: { message: err.message || "Internal error", type: "internal_error" }
     });
   }
 }
 
-// 1️⃣ Both routes (removes baseURL ambiguity)
+// Wire both routes to the same handler
 app.post("/responses", handleResponses);
 app.post("/v1/responses", handleResponses);
 
-// Model list routes
+// Model list
 app.get("/v1/models", (req, res) => res.json(openaiModelList));
-app.get("/models",    (req, res) => res.json(openaiModelList));
+app.get("/models", (req, res) => res.json(openaiModelList));
 
-// Optional legacy routes
-app.post("/v1/chat/completions", async (req, res) => { /* your existing code */ });
-app.post("/v1/messages", async (req, res) => { /* your existing code */ });
-app.post("/chat", async (req, res) => { /* your existing code */ });
-
-// Start server
 const PORT = process.env.PORT || 3333;
+
 app.listen(PORT, () => {
-  console.log(`🚀 Puter proxy running on http://localhost:${PORT}`);
-  console.log(`✅ /responses + /v1/responses both supported`);
-  console.log(`✅ Streaming + status: "completed" + correct middleware order`);
+  console.log(`🚀 Puter proxy running on port ${PORT}`);
+  console.log(`✅ Supports both /responses and /v1/responses`);
 });
