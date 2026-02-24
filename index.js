@@ -45,7 +45,7 @@ function normalizeInput(input) {
 
   return input.map(msg => {
     let role = msg.role || "user";
-    if (role === "developer") role = "system";
+    if (role === "developer") role = "system";   // Critical fix
 
     return {
       role,
@@ -108,7 +108,7 @@ async function handleResponses(req, res) {
       return res.status(providerRes.status).send(errorText);
     }
 
-    // STREAMING — Correct Web Stream handling (works on Render)
+    // STREAMING — Correct way for Node.js + fetch
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -170,5 +170,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Streaming fixed with getReader() + developer→system + conditional temperature`);
+  console.log(`✅ Streaming fixed with getReader() + temperature conditional + developer→system`);
 });
