@@ -34,7 +34,7 @@ app.get("/", (req, res) => {
   res.json({ status: "OK", service: "Puter Proxy", version: "final" });
 });
 
-// Model list for Accomplish
+// Model list
 const openaiModelList = {
   object: "list",
   data: [
@@ -62,7 +62,9 @@ function normalizeInput(input) {
   });
 }
 
-// Main handler
+// ────────────────────────────────────────────────
+// /responses (kept for Accomplish)
+// ────────────────────────────────────────────────
 async function handleResponses(req, res) {
   try {
     const { model, input, temperature, max_output_tokens } = req.body;
@@ -95,7 +97,6 @@ async function handleResponses(req, res) {
 
     if (!providerRes.ok) {
       const errorText = await providerRes.text();
-      console.error("Puter error:", errorText);
       return res.status(providerRes.status).send(errorText);
     }
 
@@ -107,10 +108,7 @@ async function handleResponses(req, res) {
       id: `resp_${Date.now().toString(36)}`,
       object: "response",
       created: Math.floor(Date.now() / 1000),
-
-      // Strip openai/ prefix as requested
-      model: (model || "").replace(/^openai\//, ""),
-
+      model,
       output: [
         {
           id: `msg_${Date.now().toString(36)}`,
@@ -119,16 +117,9 @@ async function handleResponses(req, res) {
           content: [{ type: "output_text", text: contentText }]
         }
       ],
-
-      // 🔥 CRITICAL: output_text at root level (required by ai-sdk)
-      output_text: contentText,
-
       usage: {
-        input_tokens: data.usage?.prompt_tokens ?? 1,
-        output_tokens: data.usage?.completion_tokens ?? 1,
-        total_tokens:
-          (data.usage?.prompt_tokens ?? 1) +
-          (data.usage?.completion_tokens ?? 1)
+        input_tokens: data.usage?.prompt_tokens || 0,
+        output_tokens: data.usage?.completion_tokens || 0
       }
     });
 
@@ -140,9 +131,44 @@ async function handleResponses(req, res) {
   }
 }
 
-// Support both routes
 app.post("/responses", handleResponses);
 app.post("/v1/responses", handleResponses);
+
+// ────────────────────────────────────────────────
+// /v1/chat/completions — Direct passthrough for opencode / ai-sdk
+// ────────────────────────────────────────────────
+app.post("/v1/chat/completions", async (req, res) => {
+  try {
+    const { messages, temperature, max_tokens } = req.body;
+
+    const providerRes = await fetch(
+      "https://api.puter.com/puterai/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${PUTER_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "anthropic/claude-opus-4-6",
+          messages,
+          temperature,
+          max_tokens,
+          stream: false
+        })
+      }
+    );
+
+    const data = await providerRes.json();
+    res.json(data);   // ← Direct forward, no transformation
+
+  } catch (err) {
+    console.error("FULL ERROR in /v1/chat/completions:", err);
+    res.status(500).json({
+      error: { message: err.message || "Internal error", type: "internal_error" }
+    });
+  }
+});
 
 // Model list
 app.get("/v1/models", (req, res) => res.json(openaiModelList));
@@ -152,5 +178,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ output_text at root + minimum 1 token + developer→system`);
+  console.log(`✅ /v1/chat/completions now direct passthrough + /responses kept`);
 });
