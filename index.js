@@ -41,25 +41,29 @@ const openaiModelList = {
   ]
 };
 
+// ────────────────────────────────────────────────
+// Updated normalizeInput (with developer → system fix)
+// ────────────────────────────────────────────────
 function normalizeInput(input) {
-  if (Array.isArray(input)) {
-    return input.map(msg => ({
-      role: msg.role || "user",
+  if (!Array.isArray(input)) return [];
+
+  return input.map(msg => {
+    let role = msg.role || "user";
+
+    // 🔥 Critical fix: developer role is not valid in OpenAI Chat format
+    if (role === "developer") role = "system";
+
+    return {
+      role,
       content: Array.isArray(msg.content)
         ? msg.content.map(c => c.text || c.output_text || "").join("")
         : msg.content
-    }));
-  }
-
-  if (typeof input === "string") {
-    return [{ role: "user", content: input }];
-  }
-
-  return [];
+    };
+  });
 }
 
 // ────────────────────────────────────────────────
-// Reusable Responses Handler (with proper streaming)
+// Reusable Responses Handler
 // ────────────────────────────────────────────────
 async function handleResponses(req, res) {
   try {
@@ -74,13 +78,6 @@ async function handleResponses(req, res) {
         error: { message: "No valid input", type: "invalid_request_error" }
       });
     }
-
-    // Log what we are forwarding to Puter
-    console.log("Forward body:", JSON.stringify({
-      model,
-      messages,
-      stream: !!stream
-    }));
 
     const providerRes = await fetch(
       "https://api.puter.com/puterai/openai/v1/chat/completions",
@@ -105,14 +102,13 @@ async function handleResponses(req, res) {
       return res.status(providerRes.status).send(errorText);
     }
 
-    // STREAMING MODE — Proper Web Stream passthrough
+    // STREAMING
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
       const reader = providerRes.body.getReader();
-      const encoder = new TextEncoder();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -124,7 +120,7 @@ async function handleResponses(req, res) {
       return;
     }
 
-    // Non-stream mode
+    // Non-stream
     const data = await providerRes.json();
 
     if (!data.choices?.length) {
@@ -174,5 +170,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Streaming passthrough + forward body logging active`);
+  console.log(`✅ "developer" role → "system" + full streaming passthrough`);
 });
