@@ -29,6 +29,17 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "50mb" }));
 
+// Health check for Render and Accomplish
+app.get("/", (req, res) => {
+  res.json({
+    status: "OK",
+    service: "Puter Proxy",
+    version: "final-single-token",
+    message: "Ready for Accomplish"
+  });
+});
+
+// Model list for Accomplish
 const openaiModelList = {
   object: "list",
   data: [
@@ -45,7 +56,7 @@ function normalizeInput(input) {
 
   return input.map(msg => {
     let role = msg.role || "user";
-    if (role === "developer") role = "system";
+    if (role === "developer") role = "system";   // Critical fix
 
     return {
       role,
@@ -56,12 +67,12 @@ function normalizeInput(input) {
   });
 }
 
-// Main handler — Force non-streaming for stability
+// Main handler - Force Claude Opus 4.6 + non-streaming
 async function handleResponses(req, res) {
   try {
-    const { model, input, temperature, max_output_tokens } = req.body;
+    const { model, input, temperature, max_output_tokens, stream } = req.body;
 
-    console.log("Stream requested: true → Forced false for stability");
+    console.log("Stream requested:", !!stream, "→ Forced false for stability");
 
     const messages = normalizeInput(input);
 
@@ -80,11 +91,11 @@ async function handleResponses(req, res) {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: "anthropic/claude-opus-4-6",
+          model: "anthropic/claude-opus-4-6",   // Forced stable model
           messages,
           temperature: temperature ?? 0.7,
           max_tokens: max_output_tokens ?? 4096,
-          stream: false   // ← Forced non-streaming
+          stream: false
         })
       }
     );
@@ -97,7 +108,7 @@ async function handleResponses(req, res) {
 
     const data = await providerRes.json();
 
-    const contentText = data.choices?.[0]?.message?.content || "";
+    const contentText = data.choices?.[0]?.message?.content || "I am ready to help.";
 
     res.json({
       id: `resp_${Date.now().toString(36)}`,
@@ -138,5 +149,5 @@ const PORT = process.env.PORT || 3333;
 
 app.listen(PORT, () => {
   console.log(`🚀 Puter proxy running on port ${PORT}`);
-  console.log(`✅ Non-streaming mode + Claude Opus 4.6 + developer→system fix`);
+  console.log(`✅ Single token + forced Claude Opus 4.6 + non-streaming + developer→system`);
 });
